@@ -32,7 +32,7 @@ TCP option signatures
 '''
 picotcp_tcp_opts_1 = [
         ('MSS', 1460),
-        ('SAckOK', ''),
+        ('SAckOK', b''),
         ('WScale', 0),
         ('Timestamp', None),
         ('NOP', None),
@@ -130,7 +130,7 @@ def icmpv4_probe(dst_host, timeout):
         return (stack_name, match_level_str(MATCH_NO_REPLY))
 
     # Prepare a malformed ICMP packet
-    icmp_raw = '\x08\x01\x02'
+    icmp_raw = b'\x08\x01\x02'
     ipv4_probe = IP(dst=dst_host, ttl=20, proto=0x01)/Raw(load=icmp_raw)
 
     # Send the malformed ICMP packet
@@ -140,10 +140,10 @@ def icmpv4_probe(dst_host, timeout):
     response = sr1(ipv4_probe, filter='icmp[icmptype] = {}'.format(icmptype_o), timeout=timeout)
     if response:
         if (response.ttl == 64):
-            if (hexlify(response.load) == '0001ff'):
+            if (hexlify(response.load) == b'0001ff'):
                 match = MATCH_VUL 
                 stack_name = 'PicoTCP'
-            elif (hexlify(response.load) == '00010a'):
+            elif (hexlify(response.load) == b'00010a'):
                 match = MATCH_VUL
                 stack_name = 'uIP/Contiki'
         if not match:
@@ -185,7 +185,7 @@ def tcpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
     try:
         seqn = 0
         ip_lyr = IP(version=0x4, id=0x00fb, dst=dst_host)
-        src_port = RandShort()._fix()/2+2**15
+        src_port = int(RandShort()._fix()/2+2**15)
         syn = ip_lyr/TCP(dport=dst_port, sport=src_port, flags='S', seq=seqn)
 
         # We need to set up this rule in order to disable RST packets sent by the Linux kernel
@@ -220,9 +220,6 @@ def tcpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
         elif nutnet_tcp_opts_match:
             match_tcp_opts = MATCH_POT_WEAK
             stack_name_tcp_opts = 'Nut/Net' 
-        else:
-            stack_name_tcp_opts = ''
-            match_tcp_opts = MATCH_OTHER
 
         seqn += 1
         ackn = syn_ack[TCP].seq + 1
@@ -230,7 +227,7 @@ def tcpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
         ack = ip_lyr/TCP(dport=dst_port, sport=src_port, flags='A', seq=seqn, ack=ackn)
         send(ack, iface=interface)
 
-        tcp_data = '\x41\x41'
+        tcp_data = b'\x41\x41'
         urgent_offset = 0x00
 
         urg_pkt  = ip_lyr/TCP(dport=dst_port, sport=src_port, flags='UA', seq=seqn, ack=ackn, urgptr=urgent_offset)/Raw(load=tcp_data)
@@ -260,7 +257,7 @@ def tcpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
                 match_tcp_urg = MATCH_OTHER
 
         # If we have a discrepancy between TCP options and TCP Urgent flag fingerprint...
-        if stack_name_tcp_opts and stack_name_tcp_urg and (stack_name_tcp_opts != stack_name_tcp_urg):
+        if stack_name_tcp_opts != stack_name_tcp_urg:
             if match_tcp_opts >= match_tcp_urg:
                 stack_name_tcp = stack_name_tcp_opts
                 match_tcp = match_tcp_opts
@@ -269,7 +266,7 @@ def tcpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
                 match_tcp = match_tcp_urg
 
         # If both fingerprints match the same stack...
-        elif stack_name_tcp_opts and stack_name_tcp_urg and (stack_name_tcp_opts == stack_name_tcp_urg):
+        else:
             stack_name_tcp = stack_name_tcp_opts
             match_tcp = match_tcp_opts + match_tcp_urg
 
@@ -295,10 +292,10 @@ if __name__ == '__main__':
     conf.verb = 0 # make Scapy silent
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('ip_dst', help="destination IP address")
-    parser.add_argument('-p', '--port', dest='tcp_dport', default=DEFAULT_TCP_DPORT, type=int, nargs='?', help="known open TCP port (default: {})".format(DEFAULT_TCP_DPORT))
-    parser.add_argument('-t', '--timeout', dest='timeout', default=DEFAULT_TIMEOUT, type=int, nargs='?', help="timeout (default: {})".format(DEFAULT_TIMEOUT))
-    parser.add_argument('-i', '--iface', dest='interface', default=None, nargs='?', help="interface name as shown in scapy's show_interfaces() function")
+    parser.add_argument('ip_dst', help='destination IP address')
+    parser.add_argument('-p', '--port', dest='tcp_dport', default=DEFAULT_TCP_DPORT, type=int, nargs='?', help='known open TCP port (default: {})'.format(DEFAULT_TCP_DPORT))
+    parser.add_argument('-t', '--timeout', dest='timeout', default=DEFAULT_TIMEOUT, type=int, nargs='?', help='timeout (default: {})'.format(DEFAULT_TIMEOUT))
+    parser.add_argument('-i', '--iface', dest='interface', default=None, nargs='?', help='interface name as shown in scapy\'s show_interfaces() function')
     parser.add_argument('-og', '--override-gateway', dest='gw', default=None, const='use_ip_dst', type=str, nargs='?', help='override gateway for ip_dst in scapy routing table')
     parser.add_argument('-fw', '--override-firewall', dest='fw', default=True, const=True, type=bool, nargs='?', help='override firewall')
     args = parser.parse_args()
@@ -320,7 +317,7 @@ if __name__ == '__main__':
     fw = args.fw
 
     if dst_host != None:
-        print("{}".format(dst_host))
+        print('{}'.format(dst_host))
         (stack_name_icmp, match_icmp) = icmpv4_probe(dst_host, timeout)
         if stack_name_icmp:
             print('\tICMP fingerprint => the host {} may be running the {} TCP/IP stack ({} level of confidence)'.format(dst_host, stack_name_icmp, match_icmp))

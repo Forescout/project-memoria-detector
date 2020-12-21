@@ -21,7 +21,7 @@ Although the script has been tested with the four stacks affected by AMNESIA:33 
 
 Please note that the tool has been tested only in a Linux test environment (any modern Linux distribution should work). It is assumed that the test environment is using `iptables` (https://linux.die.net/man/8/iptables) as a basic firewall.
 
-The tool requires a recent version of Python 2.x (see https://www.python.org/, version >= 2.7.17 is preferable), as well as Scapy (see https://scapy.net/, version >= 2.4.3 is preferable). 
+The tool requires a recent version of Python 2.x or 3.x (see https://www.python.org/, version >= 2.7.17 or >= 3.7.7 is preferable), as well as Scapy (see https://scapy.net/, version >= 2.4.3 is preferable). 
 
 To install Scapy together with Python and for general troubleshooting, please follow the documentation here: https://scapy.readthedocs.io/en/latest/installation.html.
 
