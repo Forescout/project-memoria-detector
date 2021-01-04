@@ -176,7 +176,7 @@ def tcpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
 
     src_ip_addr = None
     stack_name_tcp = None
-    match_tcp = MATCH_OTHER
+    match_tcp = MATCH_NO_REPLY
     stack_name_tcp_opts = None
     stack_name_tcp_urg  = None
     match_tcp_opts = MATCH_OTHER
@@ -194,9 +194,8 @@ def tcpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
             subprocess.check_call(['iptables', '-A', 'OUTPUT', '-p', 'tcp', '--tcp-flags', 'RST', 'RST', '-s', '%s' % src_ip_addr, '-j', 'DROP'])
 
         syn_ack = sr1(syn, timeout=timeout, iface=interface)
-        if not syn_ack:
+        if not syn_ack or 'R' in syn_ack[TCP].flags:
             return (None, match_level_str(MATCH_NO_REPLY))
-
 
         # check the TCP options sequence
         uip_tcp_opts_1_match = check_tcp_options(syn_ack[TCP].options, uip_tcp_opts_1)
@@ -235,6 +234,9 @@ def tcpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
 
         # Check the response to the packet with the Urgent flag set
         if urg_resp:
+            stack_name_tcp_urg = None
+            match_tcp_urg = MATCH_OTHER
+
             if urg_resp[TCP].flags == 'A':
                 if urg_resp[TCP].window == 1240 or urg_resp[TCP].window == 1460:
                     stack_name_tcp_urg = 'uIP/Contiki'
@@ -242,9 +244,6 @@ def tcpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
                 elif urg_resp[TCP].window == 3214:
                     stack_name_tcp_urg = 'Nut/Net'
                     match_tcp_urg = MATCH_POT_WEAK
-                else:
-                    stack_name_tcp_urg = None
-                    match_tcp_urg = MATCH_OTHER
 
             elif urg_resp[TCP].flags == 'FA' and urg_resp[TCP].window == 2048:
                 stack_name_tcp_urg = 'FNET'
@@ -252,9 +251,7 @@ def tcpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
             elif urg_resp[TCP].flags == 'R' and urg_resp[TCP].window == 0:
                 stack_name_tcp_urg = 'PicoTCP'
                 match_tcp_urg = MATCH_POT_WEAK
-            else:
-                stack_name_tcp_urg = None
-                match_tcp_urg = MATCH_OTHER
+
 
         # If we have a discrepancy between TCP options and TCP Urgent flag fingerprint...
         if stack_name_tcp_opts != stack_name_tcp_urg:
@@ -275,7 +272,10 @@ def tcpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
         send(rst, iface=interface)
 
     except Exception as ex:
-        print('ERROR: {}'.format(ex))
+        if 'Errno 19' in '%s' % ex:
+            print('\nERROR: the interface \'{}\' is invalid\n'.format(interface))
+        else:
+            print('\nERROR: {}\n'.format(ex))
 
     finally:
         # Cleanup the iptables rule
