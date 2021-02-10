@@ -1,21 +1,27 @@
 # project-memoria-detector
 
-The `project-memoria-detector` tool aims to determine whether a target network device runs a vulnerable TCP/IP stack. 
+The `project-memoria-detector` tool aims to determine whether a target network device runs a vulnerable embedded TCP/IP stack. 
 
-Currently, the tool supports fingerprints for four embedded TCP/IP stacks (and their variations) that were found vulnerable during the AMNESIA:33 research (see https://www.forescout.com/research-labs/amnesia33/):
+Currently, the tool supports fingerprints for nine embedded TCP/IP stacks (and their variations) that were found vulnerable during the [AMNESIA:33](https://www.forescout.com/research-labs/amnesia33/) and [NUMBER:JACK](https://www.forescout.com/company/blog/numberjack-forescout-research-labs-finds-nine-isn-generation-vulnerabilities-affecting-tcpip-stacks/) research:
 - [uIP](https://github.com/adamdunkels/uip), [Contiki](https://github.com/contiki-os/contiki) or [Contiki-NG](https://github.com/contiki-ng/contiki-ng)
 - [picoTCP](https://github.com/tass-belgium/picotcp) or [picoTCP-NG](https://github.com/virtualsquare/picotcp)
 - [Nut/Net](http://www.ethernut.de/en/software/)
 - [FNET](http://fnet.sourceforge.net/)
+- [Nucleus NET](https://www.prnewswire.com/news-releases/siemens-launches-new-enterprise-class-embedded-linux-solution-for-embedded-systems-development-300798756.html)
+- [CycloneTCP](https://www.oryx-embedded.com/products/CycloneTCP)
+- [NDKTCPIP](https://www.ti.com/tool/NDKTCPIP)
+- [uC/TCP-IP](https://github.com/weston-embedded/uC-TCP-IP)
+- [MPLAB Harmony Net](https://github.com/Microchip-MPLAB-Harmony/net)
 
 ## How does it work?
 
-The script identifies the use of four TCP/IP stacks (uIP/Contiki, picoTCP, FNET and Nut/Net) on a target device via three active fingerprinting methods:
+The script identifies the use of the nine TCP/IP stacks on a target device via four active fingerprinting methods:
 - ICMP probing: the script performs a malformed ICMP echo request and checks for characteristics of the reply, including changes in the Time-to-live (TTL) value and specific payload content, which varies per stack. 
 - TCP options signatures: the script sends a TCP SYN packet and monitors the TCP SYN ACK response for the format of the TCP options field. Each stack replies with different values for the options, such as a Maximum Segment Size (MSS) and window scale.
 - TCP Urgent flag handling: the script sends a TCP packet with the Urgent flag set and monitors the response. Each stack replies with a different set of TCP flags and a different TCP Window size value.
+- HTTP banners and error messages: the script performs HTTP requests to a webserver hosted on a device under the test and checks for specific HTTP headers and application-specific error messages.
 
-Although the script has been tested with the four stacks affected by AMNESIA:33 in a lab environment, we cannot guarantee its use to be safe against every possible device. Malformed ICMP packets, for instance, could crash a device that is running a different stack. Therefore, we do not recommend its use directly on live environments with mission-critical devices (such as hospitals with patient-connected devices or safety-critical industrial control systems). An ideal approach is to test devices in a lab setting or during a maintenance window.
+Although the script has been tested with the affected stacks in a lab environment, we cannot guarantee its use to be safe against every possible device. Malformed ICMP packets, for instance, could crash a device that is running a different stack. THEREFORE, WE DO NOT RECOMMEND ITS USE DIRECTLY ON LIVE ENVIRONMENTS WITH MISSION-CRITICAL DEVICES (SUCH AS HOSPITALS WITH PATIENT-CONNECTED DEVICES OR SAFETY-CRITICAL INDUSTRIAL CONTROL SYSTEMS). An ideal approach is to test devices in a lab setting or during a maintenance window.
 
 ## Dependencies
 
@@ -45,30 +51,50 @@ In general, the script requires at least the following three options: (1) the IP
 $ sudo -E python project-memoria-detector.py -ip_dst 192.168.212.42 -p 80 -i eth1
 ```
 
+
 ## Interpreting the results 
 
-After the tool is run against a target device, it will first output the IP address of the target, then it will output the result of the ICMP fingerprinting, followed by the result of the TCP fingerprinting. Each matched fingerprint is also complemented by the match confidence level in round brackets. For example: 
+By default, the script will output only the name of a matched TCP/IP stack and the level of certainty of the match (high, medium, low). In this case, the tool will assess all available fingerprint matches and make a decision about which stack it is, based on the fingerprint that has the highest level of confidence. For example:
 
 ```bash
-192.168.43.22
-        ICMP fingerprint => the host 192.168.43.22 may be running the uIP/Contiki TCP/IP stack (High level of confidence)
-        TCP fingerprint => the host 192.168.43.22 may be running the uIP/Contiki TCP/IP stack (Medium level of confidence) 
+$ sudo -E python project-memoria-detector.py -ip_dst 192.168.212.42 -p 80 -i eth1
+    Host 192.168.212.42 runs uIP/Contiki TCP/IP stack (High level of confidence)
 ```
 
-In cases when some of the fingerprints do not match (e.g., the signature is unknown), the tool produces an output similar to the following (in this example the target device did not match any of the ICMP fingerprints, but there was a match with the TCP fingerprints):
+However, if you wish to see the matches for individual fingerprints (ICMP, TCP, and HTTP), add the `-v` flag (or `--verbose`). This will produce the output like this:
 
 ```bash
-192.168.43.23
-        ICMP fingerprint => failed to determine the TCP/IP stack (reason: No match)
-        TCP fingerprint => the host 192.168.43.23 may be running the FNET TCP/IP stack (High level of confidence)
+$ sudo -E python project-memoria-detector.py -ip_dst 192.168.212.42 -p 80 -i eth1 -v
+Host IP: 192.168.212.42
+    ICMP fingerprint => uIP/Contiki (High level of confidence)
+    TCP fingerprint => uIP/Contiki (Medium level of confidence)
+    HTTP fingerprint => uIP/Contiki (High level of confidence)
 ```
 
-In case there is no reply to ICMP and/or TCP messages (e.g., the device is offline, and/or it does not respond to ICMP echo requests, and/or there are no open TCP ports), the output looks like this:
+In cases when some of the fingerprints do not match, the tool produces an output similar to the following (in this example the target device did not match any of the TCP and HTTP fingerprints, but there was a match with the ICMP fingerprints):
 
 ```bash
-192.168.43.24
+$ sudo -E python project-memoria-detector.py -ip_dst 192.168.212.42 -p 80 -i eth1
+    Host 192.168.212.42 runs uIP/Contiki TCP/IP stack (High level of confidence)
+
+$ sudo -E python project-memoria-detector.py -ip_dst 192.168.212.42 -p 80 -i eth1 -v
+Host IP: 192.168.212.42
+        ICMP fingerprint => uIP/Contiki (High level of confidence)
+        TCP fingerprint => failed to determine the TCP/IP stack (reason: No match)
+        HTTP fingerprint => failed to determine the TCP/IP stack (reason: No match)
+```
+
+In case there is no reply to ICMP and/or TCP messages (e.g., the device is offline, and/or it does not respond to ICMP echo requests, and/or there are no open TCP ports), the output may look like this:
+
+```bash
+$ sudo -E python project-memoria-detector.py -ip_dst 192.168.212.42 -p 80 -i eth1
+    Failed to determine the TCP/IP stack for host 192.168.212.42 (reason: No reply)
+
+$ sudo -E python project-memoria-detector.py -ip_dst 192.168.212.42 -p 80 -i eth1 -v
+Host IP: 192.168.212.42
         ICMP fingerprint => failed to determine the TCP/IP stack (reason: No reply)
         TCP fingerprint => failed to determine the TCP/IP stack (reason: No reply)
+        HTTP fingerprint => failed to determine the TCP/IP stack (reason: No reply)
 ```
 
 

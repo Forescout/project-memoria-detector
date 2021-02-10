@@ -21,7 +21,9 @@ import sys
 import subprocess
 import argparse
 from binascii import hexlify
-from scapy.all import conf, send, sr1, IP, ICMP, TCP, Raw, RandShort
+import logging
+logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
+from scapy.all import conf, send, sr1, sniff, IP, ICMP, TCP, Raw, RandShort, Padding, AsyncSniffer
 import time
 
 DEFAULT_TCP_DPORT=80
@@ -53,17 +55,44 @@ fnet_tcp_opts = [
         ('EOL', None),
 ]
 
-uip_tcp_opts_1 = [
-        ('MSS', 1460),
-]
-
-uip_tcp_opts_2 = [
+uip_tcp_opts = [
         ('MSS', 1240),
 ]
 
 nutnet_tcp_opts = [
         ('MSS', 536),
 ]
+
+nucleus_net_tcp_opts = [
+        ('MSS', 1460),
+        ('SAckOK', b''),
+        ('WScale', 0),
+        ('NOP', None),
+        ('NOP', None),
+        ('NOP', None),
+]
+
+cyclone_tcp_opts = [
+        ('MSS', 1430),
+]
+
+# MATCHES
+MATCH_HIGH=3
+MATCH_MEDIUM=2
+MATCH_LOW=1
+MATCH_NO_MATCH=0
+MATCH_NO_REPLY=-1
+
+def match_level_str(match_level):
+    if match_level >= MATCH_HIGH:
+        return 'High'
+    elif match_level == MATCH_MEDIUM:
+        return 'Medium'
+    elif match_level == MATCH_LOW:
+        return 'Low'
+    elif match_level == MATCH_NO_MATCH:
+        return 'No match'
+    return 'No reply'
 
 '''
 This is a helper function that checks the TCP option sequences
@@ -83,34 +112,37 @@ def check_tcp_options(tcp_opts, signature):
                 return False
     return True
 
-# MATCHES
-MATCH_VUL=3
-MATCH_POT=2
-MATCH_POT_WEAK=1
-MATCH_OTHER=0
-MATCH_NO_REPLY=-1
 
-def match_level_str(match_level):
-    if match_level >= MATCH_VUL:
-        return 'High'
-    elif match_level == MATCH_POT:
-        return 'Medium'
-    elif match_level == MATCH_POT_WEAK:
-        return 'Low'
-    elif match_level == MATCH_OTHER:
-        return 'No match'
-    return 'No reply'
+'''
+This is a helper function for performing a TCP 3-way handshake
+'''
+def tcp_handshake(dst_host, dst_port, interface, custom_tcp_opts, timeout):
+    # Use the default interface if none is provided
+    if interface == None:
+        interface = conf.iface
+
+    # We can use a fixed ISN
+    seqn = 0
+    ip = IP(version=0x4, id=0x00fb, dst=dst_host)
+    src_port = int(RandShort()._fix()/2+2**15)
+
+    syn = ip/TCP(dport=dst_port, sport=src_port, flags='S', seq=seqn, ack=0, options=custom_tcp_opts)
+
+    syn_ack = sr1(syn, timeout=timeout, iface=interface)
+    if syn_ack == None or TCP not in syn_ack or 'R' in syn_ack[TCP].flags:
+        return None
+
+    seqn += 1
+    ackn = syn_ack[TCP].seq + 1
+
+    ack = ip/TCP(dport=dst_port, sport=src_port, flags='A', seq=seqn, ack=ackn)
+    send(ack, iface=interface)
+
+    return syn_ack
+
 
 '''
 This function attempts to actively fingerprint the usage of embedded TCP/IP stacks via ICMPv4 echo requests.
-The function performs malformed ICMPv4 echo requests and checks for specific ICMPv4 echo replies.
-
-Based on the response seen, it returns the 'stack_name' string that suggests which embedded TCP/IP stack is used in the DUT.
-(currently, only PicoTCP and uIP/Contiki signatures are available)
-
-If none of the expected responses was seen, 'None' is returned.
-A match status is also returned (see MATCHES)
-
 '''
 def icmpv4_probe(dst_host, timeout):
     icmptype_i=0x8
@@ -118,140 +150,317 @@ def icmpv4_probe(dst_host, timeout):
     icmptype_o=0x0
     icmptype_name_o='ICMP ECHO_REPLY'
 
-    response = None
-    response2 = None 
-    stack_name = ''
-    match = ''
+    stack_name = None
+    match = MATCH_NO_MATCH
 
-    # Send a normal ICMP packet with a 'seq' number other than zero, just to ensure the seq counter at picoTCP is
-    # changed and the next packet will be accepted.
-    r = sr1(IP(dst=dst_host, ttl=20)/ICMP(id=0xff, seq=1, type=icmptype_i),filter='icmp[icmptype] = {}'.format(icmptype_o), timeout=timeout)
-    if not r:
-        return (stack_name, match_level_str(MATCH_NO_REPLY))
+    ip = IP(dst=dst_host, ttl=20, proto=0x01)
 
-    # Prepare a malformed ICMP packet
+    # First, check if we can reach ICMP
+    std_icmp_payload = '\xcd\x69\x08\x00\x00\x00\x00\x00\x10\x11\x12\x13\x14\x15\x16\x17'  \
+                        '\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x20\x21\x22\x23\x24\x25\x26\x27' \
+                        '\x28\x29\x2a\x2b\x2c\x2d\x2e\x2f\x30\x31\x32\x33\x34\x35\x36\x37'
+  
+    reply = sr1(ip/ICMP(id=0xff, seq=1, type=icmptype_i)/Raw(load=std_icmp_payload),filter='icmp[icmptype] = {}'.format(icmptype_o), timeout=timeout)
+    if not reply:
+        return (stack_name, MATCH_NO_REPLY)
+
+
+    # Nucleus Net will insert 22 zeros after the ICMP header in the reply, if the ICMP echo header didn't have any bytes after the header
+    reply = sr1(ip/ICMP(id=0xff, seq=1, type=icmptype_i),filter='icmp[icmptype] = {}'.format(icmptype_o), timeout=timeout)
+    if reply and reply.ttl == 64:
+        if Padding in reply and reply[Padding].load == b'\x00'*22:
+            match = MATCH_HIGH
+            stack_name = 'Nucleus Net'
+            return (stack_name, match)
+
+    # If there is no reply to the second ICMP packet, either the target IP cannot be reached (or ICMP is
+    # disabled), or we deal with the CycloneTCP stack that will accept only ICMP packets that have at least 1 byte
+    # of data. To check for CycloneTCP, we craft such a packet: we expect the 1 byte of data back + 17 zero bytes
+    # of padding. Also both IP and ICMP checksums must be valid.
+    else:
+        reply = sr1(ip/ICMP(id=0xff, seq=1, type=icmptype_i)/Raw(load=b'\x41'),filter='icmp[icmptype] = {}'.format(icmptype_o), timeout=timeout)
+        if reply and reply.ttl == 64:
+            if Raw in reply and Padding in reply and reply[Raw].load == b'\x41' and reply[Padding].load == 17*b'\x00':
+                match = MATCH_HIGH
+                stack_name = 'CycloneTCP'
+                return (stack_name, match)
+
+
+    # Next, we prepare a packet that should work with uIP/Contiki and PicoTCP
     icmp_raw = b'\x08\x01\x02'
-    ipv4_probe = IP(dst=dst_host, ttl=20, proto=0x01)/Raw(load=icmp_raw)
+    ipv4_probe = ip/Raw(load=icmp_raw)
 
     # Send the malformed ICMP packet
-    # If we get the expected response it is either PicoTCP or uIP/Contiki:
+    # If we get the expected reply it is either PicoTCP or uIP/Contiki:
     #   - we first check that the TTL value of the echo packet is changed into 64 for the reply packet
     #   - we then check the payload sequence of the echo reply packet
-    response = sr1(ipv4_probe, filter='icmp[icmptype] = {}'.format(icmptype_o), timeout=timeout)
-    if response:
-        if (response.ttl == 64):
-            if (hexlify(response.load) == b'0001ff'):
-                match = MATCH_VUL 
-                stack_name = 'PicoTCP'
-            elif (hexlify(response.load) == b'00010a'):
-                match = MATCH_VUL
-                stack_name = 'uIP/Contiki'
-        if not match:
-            match = MATCH_OTHER
+    reply = sr1(ipv4_probe, filter='icmp[icmptype] = {}'.format(icmptype_o), timeout=timeout)
+    if reply and reply.ttl == 64:
+        if (hexlify(reply.load) == b'0001ff'):
+            match = MATCH_HIGH 
+            stack_name = 'PicoTCP'
+        elif (hexlify(reply.load) == b'00010a'):
+            match = MATCH_HIGH
+            stack_name = 'uIP/Contiki'
 
     else: # we did not get a reply for the first malformed packet
         _id = 0xab
         _seq = 0xba
         # Nut/Net should reply to ICMP packets with incorrect IP and ICMP checksums
         ipv4_probe = IP(dst=dst_host, ttl=20, chksum=0xdead)/ICMP(id=_id, seq=_seq, type=icmptype_i, chksum=0xbeaf)
-        response = sr1(ipv4_probe, filter='icmp[icmptype] = {}'.format(icmptype_o), timeout=timeout)
-        if response:
-            if (response.ttl == 64):
-                if (response[ICMP].id == _id and response[ICMP].seq == _seq and response[ICMP].type == 0x00):
-                    match = MATCH_POT_WEAK
-                    stack_name = 'Nut/Net'
-        if not match:
-            match = MATCH_OTHER # no reply for the second malformed packet
+        reply = sr1(ipv4_probe, filter='icmp[icmptype] = {}'.format(icmptype_o), timeout=timeout)
+        # TTL value must be 64 as well
+        if reply and reply.ttl == 64:
+            if (reply[ICMP].id == _id and reply[ICMP].seq == _seq and reply[ICMP].type == 0x00):
+                match = MATCH_MEDIUM
+                stack_name = 'Nut/Net'
 
-    return (stack_name, match_level_str(match))
 
+    # Here we handle all other cases
+    if match == MATCH_NO_MATCH:
+
+        # NDKTCPIP should reply to an ICMP packet that has at least 4 bytes of the header and a correct ICMP checksum
+        # The code (2nd byte) must be 0x00
+        icmp_raw = b'\x08\x00\xf7\xff'
+        ipv4_probe = ip/Raw(load=icmp_raw)
+        # For some reason Scapy will not get the reply to this packet, so I had to use asynchronous sniffing
+        t = AsyncSniffer(iface=interface)
+        t.start()
+        send(ipv4_probe)
+        time.sleep(timeout*3)
+        pkts = t.stop()
+        for pkt in pkts:
+            # first, let's check the source and the destination IP
+            if IP in pkt and pkt[IP].src == dst_host and pkt[IP].dst == ip.src:
+                # NDKTCPIP will reply with a TTL value of 255, the ICMP checksum will be 0xffff
+                if ICMP in pkt and pkt[ICMP].type == 0x00 and pkt.ttl == 255 and pkt[ICMP].chksum == 0xffff:
+                    match = MATCH_HIGH
+                    stack_name = 'NDKTCPIP'
+                    break
+
+    return (stack_name, match)
+
+'''
+This function attempts to actively fingerprint the usage of embedded TCP/IP stacks via specific HTTP signatures.
+'''
+def httpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
+    stack_name_http = None
+    match_http = MATCH_NO_MATCH
+
+    ip = IP(version=0x4, id=0x00fb, dst=dst_host)
+
+    try:
+        # We need to set up this rule in order to disable RST packets sent by the Linux kernel
+        if use_fw:
+            subprocess.check_call(['iptables', '-A', 'OUTPUT', '-p', 'tcp', '--tcp-flags', 'RST', 'RST', '-s', '%s' % ip.src, '-j', 'DROP'])
+
+        syn_ack = tcp_handshake(dst_host, dst_port, interface, {}, timeout)
+        if syn_ack == None:
+            return (None, MATCH_NO_REPLY)
+
+        seqn = syn_ack[TCP].ack
+        ackn = syn_ack[TCP].seq+1
+
+        # Check for HTTP headers
+        http_data = b'\x47\x45\x54\x20\x2f\x20\x48\x54\x54\x50\x2f\x31\x2e\x31\x0d\x0a'     \
+                    b'\x48\x6f\x73\x74\x3a\x20%s\x0d\x0a\x55\x73\x65\x72\x2d\x41\x67\x65'   \
+                    b'\x6e\x74\x3a\x20\x63\x75\x72\x6c\x2f\x37\x2e\x35\x38\x2e\x30\x0d\x0a' \
+                    b'\x41\x63\x63\x65\x70\x74\x3a\x20\x2a\x2f\x2a\x0d\x0a\x0d\x0a' % dst_host.encode('utf-8')
+
+
+        http_get = ip/TCP(dport=dst_port, sport=syn_ack[TCP].dport, flags='PA', seq=seqn, ack=ackn)/Raw(load=http_data)
+        send(http_get, iface=interface)
+        response_pkts = sniff(filter='tcp and src %s' % dst_host, timeout=timeout*2, iface=interface)
+        for pkt in response_pkts:
+            if Raw in pkt:
+                # uIP/Contiki
+                if b'Server: Contiki/3' in pkt[Raw].load or b'Server: Contiki/2' in pkt[Raw].load or b'Server: uIP/0' in pkt[Raw].load or b'Server: uIP/1' in pkt[Raw].load:
+                    stack_name_http = 'uIP/Contiki'
+                    match_http = MATCH_HIGH
+                    break
+
+                # uC/TCP-IP
+                elif b'Server: uC-HTTP-server' in pkt[Raw].load or b'Server: uC-HTTPs V2.00.00' in pkt[Raw].load:
+                    stack_name_http = 'uC/TCP-IP'
+                    match_http = MATCH_HIGH
+                    break
+
+                # Nut/Net
+                elif b'Server: Ethernut' in pkt[Raw].load:
+                    stack_name_http = 'Nut/Net'
+                    match_http = MATCH_HIGH
+                    break
+
+                # FNET
+                elif b'Server: FNET HTTP' in pkt[Raw].load:
+                    stack_name_http = 'FNET'
+                    match_http = MATCH_HIGH
+                    break
+
+        # Terminate the connection
+        rst = ip/TCP(dport=dst_port, sport=syn_ack[TCP].dport, flags='R', seq=seqn, ack=ackn)
+        send(rst, iface=interface)
+
+        # If none of the banners matches, we try to get application-specific error messages
+        if match_http == MATCH_NO_MATCH:
+
+            # Initiate another 3-way handshake
+            syn_ack = tcp_handshake(dst_host, dst_port, interface, {}, timeout)
+            if syn_ack == None:
+                return (None, MATCH_NO_REPLY)
+
+            seqn = syn_ack[TCP].ack
+            ackn = syn_ack[TCP].seq+1
+
+            # Check for an implementation-specific error message from MPLAB Harmony Net
+            http_data = b'\x4f\x50\x54\x49\x4f\x4e\x53\x20\x2f\x20\x48\x54\x54\x50\x2f\x31\x2e\x30\x0d\x0a\x0d\x0a'
+            http_pkt  = ip/TCP(dport=dst_port, sport=syn_ack[TCP].dport, flags='PA', seq=seqn, ack=ackn)/Raw(load=http_data)
+            send(http_pkt, iface=interface)
+
+            pkts = sniff(filter='tcp and src %s' % dst_host, timeout=timeout, iface=interface)
+            if pkts and Raw in pkts[0] and pkts[0][Raw].load == b'HTTP/1.1 501 Not Implemented\r\nConnection: close\r\n\r\n501 Not Implemented: Only GET and POST supported\r\n':
+                stack_name_http = 'MPLAB Harmony Net'
+                match_http = MATCH_HIGH
+
+            # Terminate the connection
+            rst = ip/TCP(dport=dst_port, sport=syn_ack[TCP].dport, flags='R', seq=seqn, ack=ackn)
+            send(rst, iface=interface)
+
+
+    except Exception as ex:
+        if 'Errno 19' in '%s' % ex:
+            print('\nERROR: the interface \'{}\' is invalid\n'.format(interface))
+        else:
+            print('\nERROR: {}\n'.format(ex))
+
+    finally:
+        # Cleanup the iptables rule
+        if use_fw:
+            subprocess.check_call(['iptables', '-D', 'OUTPUT', '-p', 'tcp', '--tcp-flags', 'RST', 'RST', '-s', '%s' % ip.src, '-j', 'DROP'])
+
+    return (stack_name_http, match_http)
 
 '''
 This function attempts to actively fingerprint the usage of embedded TCP/IP stacks via specific TCP signatures.
 '''
-def tcpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
-    # Use the default interface if none is provided
-    if interface == None:
-        interface = conf.iface
-
-    src_ip_addr = None
+def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, use_fw, timeout):
     stack_name_tcp = None
-    match_tcp = MATCH_NO_REPLY
     stack_name_tcp_opts = None
     stack_name_tcp_urg  = None
-    match_tcp_opts = MATCH_OTHER
-    match_tcp_urg  = MATCH_OTHER
+
+    match_tcp = MATCH_NO_MATCH
+    match_tcp_opts = MATCH_NO_MATCH
+    match_tcp_urg  = MATCH_NO_MATCH
+
+    ip = IP(version=0x4, id=0x00fb, dst=dst_host)
 
     try:
-        seqn = 0
-        ip_lyr = IP(version=0x4, id=0x00fb, dst=dst_host)
-        src_port = int(RandShort()._fix()/2+2**15)
-        syn = ip_lyr/TCP(dport=dst_port, sport=src_port, flags='S', seq=seqn)
-
         # We need to set up this rule in order to disable RST packets sent by the Linux kernel
-        src_ip_addr = syn.src
         if use_fw:
-            subprocess.check_call(['iptables', '-A', 'OUTPUT', '-p', 'tcp', '--tcp-flags', 'RST', 'RST', '-s', '%s' % src_ip_addr, '-j', 'DROP'])
+            subprocess.check_call(['iptables', '-A', 'OUTPUT', '-p', 'tcp', '--tcp-flags', 'RST', 'RST', '-s', '%s' % ip.src, '-j', 'DROP'])
 
-        syn_ack = sr1(syn, timeout=timeout, iface=interface)
-        if not syn_ack or 'R' in syn_ack[TCP].flags:
-            return (None, match_level_str(MATCH_NO_REPLY))
+        syn_ack = tcp_handshake(dst_host, dst_port, interface, custom_tcp_opts, timeout)
+        if syn_ack == None:
+            return (None, MATCH_NO_REPLY)
 
-        # check the TCP options sequence
-        uip_tcp_opts_1_match = check_tcp_options(syn_ack[TCP].options, uip_tcp_opts_1)
-        uip_tcp_opts_2_match = check_tcp_options(syn_ack[TCP].options, uip_tcp_opts_2)
+        # Find a TCP options sequence that matches the response
+        uip_tcp_opts_match = check_tcp_options(syn_ack[TCP].options, uip_tcp_opts)
         fnet_tcp_opts_match = check_tcp_options(syn_ack[TCP].options, fnet_tcp_opts)
         picotcp_tcp_opts_1_match = check_tcp_options(syn_ack[TCP].options, picotcp_tcp_opts_1)
         picotcp_tcp_opts_2_match = check_tcp_options(syn_ack[TCP].options, picotcp_tcp_opts_2)
         nutnet_tcp_opts_match = check_tcp_options(syn_ack[TCP].options, nutnet_tcp_opts)
+        nucleus_net_tcp_opts_match = check_tcp_options(syn_ack[TCP].options, nucleus_net_tcp_opts)
+        cyclone_tcp_opts_match = check_tcp_options(syn_ack[TCP].options, cyclone_tcp_opts)
         timeout2=timeout
 
-        if uip_tcp_opts_1_match or uip_tcp_opts_2_match: 
-            match_tcp_opts = MATCH_POT_WEAK 
+        # Check TCP options for uIP/Contiki
+        if uip_tcp_opts_match: 
+            match_tcp_opts = MATCH_LOW 
             stack_name_tcp_opts = 'uIP/Contiki'
+
+        # Check TCP options for FNET
         elif fnet_tcp_opts_match:
-            match_tcp_opts = MATCH_POT
+            match_tcp_opts = MATCH_MEDIUM
             stack_name_tcp_opts = 'FNET'
             timeout2=20 # FNET may need a bit more time to send the [FIN, ACK] packet
+
+        # Check TCP options for PicoTCP
         elif picotcp_tcp_opts_1_match or picotcp_tcp_opts_2_match:
-            match_tcp_opts = MATCH_POT
+            match_tcp_opts = MATCH_MEDIUM
             stack_name_tcp_opts = 'PicoTCP'
+
+        # Check TCP options for Nut/Net
         elif nutnet_tcp_opts_match:
-            match_tcp_opts = MATCH_POT_WEAK
+            match_tcp_opts = MATCH_LOW
             stack_name_tcp_opts = 'Nut/Net' 
 
-        seqn += 1
-        ackn = syn_ack[TCP].seq + 1
+        # Check TCP options for Nucleus Net
+        elif nucleus_net_tcp_opts_match:
+            match_tcp_opts = MATCH_LOW
+            stack_name_tcp_opts = 'Nucleus Net' 
 
-        ack = ip_lyr/TCP(dport=dst_port, sport=src_port, flags='A', seq=seqn, ack=ackn)
-        send(ack, iface=interface)
+        # Check TCP options for CycloneTCP
+        elif cyclone_tcp_opts_match:
+            match_tcp_opts = MATCH_LOW
+            stack_name_tcp_opts = 'CycloneTCP' 
 
-        tcp_data = b'\x41\x41'
-        urgent_offset = 0x00
-
-        urg_pkt  = ip_lyr/TCP(dport=dst_port, sport=src_port, flags='UA', seq=seqn, ack=ackn, urgptr=urgent_offset)/Raw(load=tcp_data)
+        seqn = syn_ack[TCP].ack
+        ackn = syn_ack[TCP].seq+1
+    
+        # Send a TCP segment with the Urgent flag set
+        urg_pkt  = ip/TCP(dport=dst_port, sport=syn_ack[TCP].dport, flags='UA', seq=seqn, ack=ackn, urgptr=0x00)/Raw(load=b'\x41\x41\x41')
         urg_resp = sr1(urg_pkt, timeout=timeout2, iface=interface)
 
-        # Check the response to the packet with the Urgent flag set
-        if urg_resp:
-            stack_name_tcp_urg = None
-            match_tcp_urg = MATCH_OTHER
 
+        # Terminate the connection
+        rst = ip/TCP(dport=dst_port, sport=syn_ack[TCP].dport, flags='R', seq=seqn, ack=ackn)
+        send(rst, iface=interface)
+
+
+        # Check the response to the packet with the Urgent flag 
+        if urg_resp:
             if urg_resp[TCP].flags == 'A':
+                # Check the Urgent flag response for uIP/Contiki
                 if urg_resp[TCP].window == 1240 or urg_resp[TCP].window == 1460:
                     stack_name_tcp_urg = 'uIP/Contiki'
-                    match_tcp_urg = MATCH_POT_WEAK
-                elif urg_resp[TCP].window == 3214:
-                    stack_name_tcp_urg = 'Nut/Net'
-                    match_tcp_urg = MATCH_POT_WEAK
+                    match_tcp_urg = MATCH_LOW
 
+                # Check the Urgent flag response for Nut/Net
+                elif urg_resp[TCP].window == 3213:
+                    stack_name_tcp_urg = 'Nut/Net'
+                    match_tcp_urg = MATCH_LOW
+
+                # Check the Urgent flag response for Nucleus Net
+                elif urg_resp[TCP].window == 16000:
+                    stack_name_tcp_urg = 'Nucleus Net'
+                    match_tcp_urg = MATCH_LOW
+
+                # Check the Urgent flag response for CycloneTCP
+                elif urg_resp[TCP].window == 2858:
+                    stack_name_tcp_urg = 'CycloneTCP'
+                    match_tcp_urg = MATCH_LOW
+
+                # Check the Urgent flag response for NDKTCPIP
+                elif urg_resp[TCP].window == 1024:
+                    stack_name_tcp_urg = 'NDKTCPIP'
+                    match_tcp_urg = MATCH_LOW
+
+            # Check the Urgent flag response for FNET
             elif urg_resp[TCP].flags == 'FA' and urg_resp[TCP].window == 2048:
                 stack_name_tcp_urg = 'FNET'
-                match_tcp_urg = MATCH_POT_WEAK
-            elif urg_resp[TCP].flags == 'R' and urg_resp[TCP].window == 0:
-                stack_name_tcp_urg = 'PicoTCP'
-                match_tcp_urg = MATCH_POT_WEAK
+                match_tcp_urg = MATCH_LOW
 
+            elif urg_resp[TCP].flags == 'R':
+                # Check the Urgent flag response for PicoTCP
+                if urg_resp[TCP].window == 0:
+                    stack_name_tcp_urg = 'PicoTCP'
+                    match_tcp_urg = MATCH_LOW
+
+            # Make an additional check for NDKTCPIP, in case we are dealing with an TCP echo server
+            elif urg_resp[TCP].flags == 'PA':
+                if urg_resp[TCP].window == 1024:
+                    stack_name_tcp_urg = 'NDKTCPIP'
+                    match_tcp_urg = MATCH_LOW
 
         # If we have a discrepancy between TCP options and TCP Urgent flag fingerprint...
         if stack_name_tcp_opts != stack_name_tcp_urg:
@@ -267,9 +476,6 @@ def tcpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
             stack_name_tcp = stack_name_tcp_opts
             match_tcp = match_tcp_opts + match_tcp_urg
 
-        # Terminate the connection
-        rst = ip_lyr/TCP(dport=dst_port, sport=src_port, flags='R', seq=seqn, ack=ackn)
-        send(rst, iface=interface)
 
     except Exception as ex:
         if 'Errno 19' in '%s' % ex:
@@ -280,22 +486,21 @@ def tcpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
     finally:
         # Cleanup the iptables rule
         if use_fw:
-            if src_ip_addr != None:
-                subprocess.check_call(['iptables', '-D', 'OUTPUT', '-p', 'tcp', '--tcp-flags', 'RST', 'RST', '-s', '%s' % src_ip_addr, '-j', 'DROP'])
+            subprocess.check_call(['iptables', '-D', 'OUTPUT', '-p', 'tcp', '--tcp-flags', 'RST', 'RST', '-s', '%s' % ip.src, '-j', 'DROP'])
 
-    return (stack_name_tcp, match_level_str(match_tcp))
+    return (stack_name_tcp, match_tcp)
 
 '''
 The is the main code block
 '''
 if __name__ == '__main__':
-    conf.verb = 0 # make Scapy silent
-
+    conf.verb = 0 
     parser = argparse.ArgumentParser()
     parser.add_argument('ip_dst', help='destination IP address')
     parser.add_argument('-p', '--port', dest='tcp_dport', default=DEFAULT_TCP_DPORT, type=int, nargs='?', help='known open TCP port (default: {})'.format(DEFAULT_TCP_DPORT))
     parser.add_argument('-t', '--timeout', dest='timeout', default=DEFAULT_TIMEOUT, type=int, nargs='?', help='timeout (default: {})'.format(DEFAULT_TIMEOUT))
     parser.add_argument('-i', '--iface', dest='interface', default=None, nargs='?', help='interface name as shown in scapy\'s show_interfaces() function')
+    parser.add_argument('-v', '--verbose', dest='verbose', default=False, nargs='?', type=bool, const=True, help='provide verbose output')
     parser.add_argument('-og', '--override-gateway', dest='gw', default=None, const='use_ip_dst', type=str, nargs='?', help='override gateway for ip_dst in scapy routing table')
     parser.add_argument('-fw', '--override-firewall', dest='fw', default=True, const=True, type=bool, nargs='?', help='override firewall')
     args = parser.parse_args()
@@ -315,18 +520,53 @@ if __name__ == '__main__':
     dst_port = args.tcp_dport
     timeout = args.timeout
     fw = args.fw
+    verbose = args.verbose
 
     if dst_host != None:
-        print('{}'.format(dst_host))
-        (stack_name_icmp, match_icmp) = icmpv4_probe(dst_host, timeout)
-        if stack_name_icmp:
-            print('\tICMP fingerprint => the host {} may be running the {} TCP/IP stack ({} level of confidence)'.format(dst_host, stack_name_icmp, match_icmp))
-        else:
-            print('\tICMP fingerprint => failed to determine the TCP/IP stack (reason: {})'.format(match_icmp))
-
-        if dst_port != None:
-            (stack_name_tcp, match_tcp) = tcpv4_probe(dst_host, dst_port, interface, fw, timeout)
-            if stack_name_tcp:
-                print('\tTCP fingerprint => the host {} may be running the {} TCP/IP stack ({} level of confidence)\n'.format(dst_host, stack_name_tcp, match_tcp))
+        # Verbose output (can be used for troubleshooting)
+        if verbose:
+            print('Host IP: {}'.format(dst_host))
+            (stack_name_icmp, match_icmp) = icmpv4_probe(dst_host, timeout)
+            if stack_name_icmp:
+                print('\tICMP fingerprint => {} ({} level of confidence)'.format(stack_name_icmp, match_level_str(match_icmp)))
             else:
-                print('\tTCP fingerprint => failed to determine the TCP/IP stack (reason: {})\n'.format(match_tcp))
+                print('\tICMP fingerprint => failed to determine the TCP/IP stack (reason: {})'.format(match_level_str(match_icmp)))
+
+            if dst_port != None:
+                # We send these options because while some of the stacks ignore them, some others (e.g., Nucleus Net) will
+                # include these options (with specific values) into the reply segment
+                custom_tcp_opts = [
+                    ('WScale', 42),
+                    ('SAckOK', b''),
+                ]
+                (stack_name_tcp, match_tcp) = tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, fw, timeout)
+                if stack_name_tcp:
+                    print('\tTCP fingerprint => {} ({} level of confidence)'.format(stack_name_tcp, match_level_str(match_tcp)))
+                else:
+                    print('\tTCP fingerprint => failed to determine the TCP/IP stack (reason: {})'.format(match_level_str(match_tcp)))
+
+                (stack_name_http, match_http) = httpv4_probe(dst_host, dst_port, interface, fw, timeout)
+                if stack_name_http:
+                    print('\tHTTP fingerprint => {} ({} level of confidence)'.format(stack_name_http, match_level_str(match_http)))
+                else:
+                    print('\tHTTP fingerprint => failed to determine the TCP/IP stack (reason: {})'.format(match_level_str(match_http)))
+
+        # Simplified output
+        else:
+            matches = []
+            (stack_name_icmp, match_icmp) = icmpv4_probe(dst_host, timeout)
+            matches.append((stack_name_icmp, match_icmp))
+            if dst_port != None:
+                custom_tcp_opts = [
+                    ('WScale', 42),
+                    ('SAckOK', b''),
+                ]
+                (stack_name_tcp, match_tcp) = tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, fw, timeout)
+                matches.append((stack_name_tcp, match_tcp))
+                (stack_name_http, match_http) = httpv4_probe(dst_host, dst_port, interface, fw, timeout)
+                matches.append((stack_name_http, match_http))
+                _matches = sorted(matches, reverse=True, key=lambda x: x[1])
+                if _matches[0][0] != None:
+                    print('\tHost {} runs {} TCP/IP stack ({} level of confidence)'.format(dst_host, _matches[0][0], match_level_str(_matches[0][1])))
+                else:
+                    print('\tFailed to determine the TCP/IP stack for host {} (reason: {})'.format(dst_host, match_level_str(_matches[0][1])))
