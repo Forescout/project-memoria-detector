@@ -108,6 +108,15 @@ cyclone_tcp_opts = [
     ('MSS', 1430),
 ]
 
+bcm_3390_tcp_opts = [
+    ('MSS', 1938),
+    ('NOP', None),
+    ('NOP', None),
+    ('SAckOK', ''),
+    ('NOP', None),
+    ('WScale', 6),
+]
+
 # MATCHES
 MATCH_HIGH = 3
 MATCH_MEDIUM = 2
@@ -610,6 +619,9 @@ def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, use_fw, timeout)
         nucleus_net_tcp_opts_match = check_tcp_options(syn_ack[TCP].options, nucleus_net_tcp_opts)
         
         cyclone_tcp_opts_match = check_tcp_options(syn_ack[TCP].options, cyclone_tcp_opts)
+
+	    bcm_3390_tcp_opts_match = check_tcp_options(syn_ack[TCP].options, bcm_3390_tcp_opts)
+
         timeout2 = timeout
 
         # Check TCP options for uIP/Contiki
@@ -643,6 +655,11 @@ def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, use_fw, timeout)
         elif cyclone_tcp_opts_match:
             match_tcp_opts = MATCH_LOW
             stack_name_tcp_opts = 'CycloneTCP'
+
+        # Check TCP options for CycloneTCP
+        elif bcm_3390_tcp_opts_match:
+            match_tcp_opts = MATCH_HIGH
+            stack_name_tcp_opts = 'BCM3390'
 
         seqn = syn_ack[TCP].ack
         ackn = syn_ack[TCP].seq+1
