@@ -13,7 +13,6 @@ Currently, the tool supports fingerprints for 16 embedded TCP/IP stacks (and the
 - [uC/TCP-IP](https://github.com/weston-embedded/uC-TCP-IP)
 - [MPLAB Harmony Net](https://github.com/Microchip-MPLAB-Harmony/net)
 - [NicheStack](https://en.wikipedia.org/wiki/NicheStack_TCP/IPv4)
-- [Nucleus Net](https://www.plm.automation.siemens.com/global/en/products/embedded/nucleus-rtos.html)
 - [FreeBSD](https://www.freebsd.org/)
 - [Microsoft ThreadX](https://docs.microsoft.com/en-us/azure/rtos/threadx/overview-threadx)
 - [CMX TCP/IP](http://www.cmx.com/tcpip.htm)
