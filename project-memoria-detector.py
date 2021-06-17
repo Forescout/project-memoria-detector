@@ -303,8 +303,8 @@ This function attempts to actively fingerprint the usage of embedded TCP/IP stac
 '''
 
 def httpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
-    stack_name_http = None
-    match_http = MATCH_NO_MATCH
+    stack_name = None
+    match_confidence = MATCH_NO_MATCH
 
     ip = IP(version=0x4, id=0x00fb, dst=dst_host)
 
@@ -337,75 +337,75 @@ def httpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
                 # uIP/Contiki
                 if re.search(b'Server: Contiki/([\w._-]+)', pkt[Raw].load, re.MULTILINE | re.IGNORECASE) is not None \
                         or re.search(b'Server: uIP/([\w._-]+)', pkt[Raw].load, re.MULTILINE | re.IGNORECASE) is not None:
-                    stack_name_http = 'uIP/Contiki'
-                    match_http = MATCH_HIGH
+                    stack_name = 'uIP/Contiki'
+                    match_confidence = MATCH_HIGH
                     break
 
                 # uC/TCP-IP
                 elif b'Server: uC-HTTP-server' in pkt[Raw].load or b'Server: uC-HTTPs V2.00.00' in pkt[Raw].load:
-                    stack_name_http = 'uC/TCP-IP'
-                    match_http = MATCH_HIGH
+                    stack_name = 'uC/TCP-IP'
+                    match_confidence = MATCH_HIGH
                     break
 
                 # Nut/Net
                 elif b'Server: Ethernut' in pkt[Raw].load:
-                    stack_name_http = 'Nut/Net'
-                    match_http = MATCH_HIGH
+                    stack_name = 'Nut/Net'
+                    match_confidence = MATCH_HIGH
                     break
 
                 # FNET
                 elif b'Server: FNET HTTP' in pkt[Raw].load:
-                    stack_name_http = 'FNET'
-                    match_http = MATCH_HIGH
+                    stack_name = 'FNET'
+                    match_confidence = MATCH_HIGH
                     break
 
                 # NicheStack
                 elif b'Server: InterNiche Technologies WebServer' in pkt[Raw].load:
-                    stack_name_http = 'NicheStack'
-                    match_http = MATCH_HIGH
+                    stack_name = 'NicheStack'
+                    match_confidence = MATCH_HIGH
                     break
 
                 # FreeBSD HTTP Servers
                 elif re.search(b'Server: \w.+\/\d.*\(FreeBSD\)', pkt[Raw].load) is not None \
                         or re.search(b'Server: httpd_\d.*\/FreeBSD', pkt[Raw].load) is not None:
-                    stack_name_http = 'FreeBSD'
-                    match_http = MATCH_HIGH
+                    stack_name = 'FreeBSD'
+                    match_confidence = MATCH_HIGH
                     break
 
                 # FreeBSD protocol mismatch on SSH port
                 elif re.search(b'OpenSSH_\d.* FreeBSD-\d.*\\r\\nProtocol mismatch\.\\n', pkt[Raw].load, re.MULTILINE | re.IGNORECASE) is not None:
-                    stack_name_http = 'FreeBSD'
-                    match_http = MATCH_HIGH
+                    stack_name = 'FreeBSD'
+                    match_confidence = MATCH_HIGH
                     break
 
                 # NettX
                 elif re.search(b'Server: (\w.+) \(\s?ThreadX\s?\)', pkt[Raw].load, re.MULTILINE | re.IGNORECASE) is not None:
-                    stack_name_http = 'NettX'
-                    match_http = MATCH_HIGH
+                    stack_name = 'NettX'
+                    match_confidence = MATCH_HIGH
                     break
 
                 # CMX-TCP/IP
                 elif b'Server: CMX TCP\/IP - WEB' in pkt[Raw].load or b'Server: CMX Systems WebServer' in pkt[Raw].load:
-                    stack_name_http = 'CMX-TCP/IP'
-                    match_http = MATCH_HIGH
+                    stack_name = 'CMX-TCP/IP'
+                    match_confidence = MATCH_HIGH
                     break
 
                 # emNet
                 elif b'Server: embOS/IP' in pkt[Raw].load or b'Server: CMX Systems WebServer' in pkt[Raw].load:
-                    stack_name_http = 'emNet'
-                    match_http = MATCH_HIGH
+                    stack_name = 'emNet'
+                    match_confidence = MATCH_HIGH
                     break
 
                 # Keil TCPnet
                 elif re.search(b'Server: Keil-EWEB\/\d.+', pkt[Raw].load, re.MULTILINE | re.IGNORECASE) is not None:
-                    stack_name_http = 'Keil TCPnet'
-                    match_http = MATCH_HIGH
+                    stack_name = 'Keil TCPnet'
+                    match_confidence = MATCH_HIGH
                     break
 
                 # lwIP
                 elif re.search(b'Server: lwIP/([\w._-]+)', pkt[Raw].load, re.MULTILINE | re.IGNORECASE) is not None:
-                    stack_name_http = 'lwIP'
-                    match_http = MATCH_HIGH
+                    stack_name = 'lwIP'
+                    match_confidence = MATCH_HIGH
                     break
 
         # Terminate the connection
@@ -413,7 +413,7 @@ def httpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
         send(rst, iface=interface)
 
         # If none of the banners matches, we try to get application-specific error messages
-        if match_http == MATCH_NO_MATCH:
+        if match_confidence == MATCH_NO_MATCH:
 
             # Initiate another 3-way handshake
             syn_ack = tcp_handshake(dst_host, dst_port, interface, {}, timeout)
@@ -431,8 +431,8 @@ def httpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
 
             for pkt in pkts:
                 if Raw in pkt and pkt[Raw].load == b'HTTP/1.1 501 Not Implemented\r\nConnection: close\r\n\r\n501 Not Implemented: Only GET and POST supported\r\n':
-                    stack_name_http = 'MPLAB Harmony Net'
-                    match_http = MATCH_HIGH
+                    stack_name = 'MPLAB Harmony Net'
+                    match_confidence = MATCH_HIGH
                     break
 
             # Terminate the connection
@@ -451,7 +451,7 @@ def httpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
             subprocess.check_call(['iptables', '-D', 'OUTPUT', '-p', 'tcp',
                                    '--tcp-flags', 'RST', 'RST', '-s', '%s' % ip.src, '-j', 'DROP'])
 
-    return (stack_name_http, match_http)
+    return (stack_name, match_confidence)
 
 
 '''
@@ -459,8 +459,8 @@ This function attempts to actively fingerprint the usage of embedded TCP/IP stac
 '''
 
 def sshv4_probe(dst_host, dst_port, interface, use_fw, timeout):
-    stack_name_ssh = None
-    match_ssh = MATCH_NO_MATCH
+    stack_name = None
+    match_confidence = MATCH_NO_MATCH
 
     ip = IP(version=0x4, id=0x00fb, dst=dst_host)
 
@@ -481,8 +481,8 @@ def sshv4_probe(dst_host, dst_port, interface, use_fw, timeout):
 
                 # FreeBSD
                 if re.search(b'OpenSSH_(\d.*)\sFreeBSD', pkt[Raw].load, re.IGNORECASE):
-                    stack_name_ssh = 'FreeBSD'
-                    match_ssh = MATCH_HIGH
+                    stack_name = 'FreeBSD'
+                    match_confidence = MATCH_HIGH
                     break
 
     except Exception as ex:
@@ -497,7 +497,7 @@ def sshv4_probe(dst_host, dst_port, interface, use_fw, timeout):
             subprocess.check_call(['iptables', '-D', 'OUTPUT', '-p', 'tcp',
                                    '--tcp-flags', 'RST', 'RST', '-s', '%s' % ip.src, '-j', 'DROP'])
 
-    return (stack_name_ssh, match_ssh)
+    return (stack_name, match_confidence)
 
 
 '''
@@ -505,8 +505,8 @@ This function attempts to actively fingerprint the usage of embedded TCP/IP stac
 '''
 
 def ftpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
-    stack_name_ftp = None
-    match_ftp = MATCH_NO_MATCH
+    stack_name = None
+    match_confidence = MATCH_NO_MATCH
 
     ip = IP(version=0x4, id=0x00fb, dst=dst_host)
 
@@ -527,32 +527,32 @@ def ftpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
 
                 # FreeBSD (low confidence, because the exact response depends on the hostname)
                 if b'220 freebsd FTP server' in pkt[Raw].load:
-                    stack_name_ftp = 'FreeBSD'
-                    match_ftp = MATCH_LOW
+                    stack_name = 'FreeBSD'
+                    match_confidence = MATCH_LOW
                     break
 
                 # Nucleus Net
                 elif b'220 Nucleus FTP Server (Version' in pkt[Raw].load:
-                    stack_name_ftp = 'Nucleus Net'
-                    match_ftp = MATCH_HIGH
+                    stack_name = 'Nucleus Net'
+                    match_confidence = MATCH_HIGH
                     break
 
                 # CMX-TCP/IP
                 elif re.search(b'^220 CMX TCP/IP - REMOTE FTP Server \(version \w.+\) ready', pkt[Raw].load, re.IGNORECASE) is not None:
-                    stack_name_http = 'CMX-TCP/IP'
-                    match_http = MATCH_HIGH
+                    stack_name = 'CMX-TCP/IP'
+                    match_confidence = MATCH_HIGH
                     break
 
                 # emNet
                 elif re.search(b'^220 Welcome to embOS/IP FTP server', pkt[Raw].load, re.IGNORECASE) is not None:
-                    stack_name_http = 'emNet'
-                    match_http = MATCH_HIGH
+                    stack_name = 'emNet'
+                    match_confidence = MATCH_HIGH
                     break
 
                 # Keil TCPnet
                 elif re.search(b'^220 Keil FTP server', pkt[Raw].load, re.IGNORECASE) is not None:
-                    stack_name_http = 'Keil TCPnet'
-                    match_http = MATCH_HIGH
+                    stack_name = 'Keil TCPnet'
+                    match_confidence = MATCH_HIGH
                     break
 
     except Exception as ex:
@@ -567,7 +567,7 @@ def ftpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
             subprocess.check_call(['iptables', '-D', 'OUTPUT', '-p', 'tcp',
                                    '--tcp-flags', 'RST', 'RST', '-s', '%s' % ip.src, '-j', 'DROP'])
 
-    return (stack_name_ftp, match_ftp)
+    return (stack_name, match_confidence)
 
 
 '''
@@ -575,13 +575,13 @@ This function attempts to actively fingerprint the usage of embedded TCP/IP stac
 '''
 
 def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, use_fw, timeout):
-    stack_name_tcp = None
-    stack_name_tcp_opts = None
-    stack_name_tcp_urg = None
+    stack_name = None
+    stack_name_opts = None
+    stack_name_urg = None
 
-    match_tcp = MATCH_NO_MATCH
-    match_tcp_opts = MATCH_NO_MATCH
-    match_tcp_urg = MATCH_NO_MATCH
+    match_confidence = MATCH_NO_MATCH
+    match_confidence_opts = MATCH_NO_MATCH
+    match_confidence_urg = MATCH_NO_MATCH
 
     ip = IP(version=0x4, id=0x00fb, dst=dst_host)
 
@@ -614,35 +614,35 @@ def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, use_fw, timeout)
 
         # Check TCP options for uIP/Contiki
         if uip_tcp_opts_match:
-            match_tcp_opts = MATCH_LOW
-            stack_name_tcp_opts = 'uIP/Contiki'
+            match_confidence_opts = MATCH_LOW
+            stack_name_opts = 'uIP/Contiki'
 
         # Check TCP options for FNET
         elif fnet_tcp_opts_match:
-            match_tcp_opts = MATCH_MEDIUM
-            stack_name_tcp_opts = 'FNET'
+            match_confidence_opts = MATCH_MEDIUM
+            stack_name_opts = 'FNET'
             # FNET may need a bit more time to send the [FIN, ACK] packet
             timeout2 = 20
 
         # Check TCP options for PicoTCP
         elif picotcp_tcp_opts_1_match or picotcp_tcp_opts_2_match:
-            match_tcp_opts = MATCH_MEDIUM
-            stack_name_tcp_opts = 'PicoTCP'
+            match_confidence_opts = MATCH_MEDIUM
+            stack_name_opts = 'PicoTCP'
 
         # Check TCP options for Nut/Net
         elif nutnet_tcp_opts_match:
-            match_tcp_opts = MATCH_LOW
-            stack_name_tcp_opts = 'Nut/Net'
+            match_confidence_opts = MATCH_LOW
+            stack_name_opts = 'Nut/Net'
 
         # Check TCP options for Nucleus Net
         elif nucleus_net_tcp_opts_match:
-            match_tcp_opts = MATCH_LOW
-            stack_name_tcp_opts = 'Nucleus Net'
+            match_confidence_opts = MATCH_LOW
+            stack_name_opts = 'Nucleus Net'
 
         # Check TCP options for CycloneTCP
         elif cyclone_tcp_opts_match:
-            match_tcp_opts = MATCH_LOW
-            stack_name_tcp_opts = 'CycloneTCP'
+            match_confidence_opts = MATCH_LOW
+            stack_name_opts = 'CycloneTCP'
 
         seqn = syn_ack[TCP].ack
         ackn = syn_ack[TCP].seq+1
@@ -660,64 +660,64 @@ def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, use_fw, timeout)
             if urg_resp[TCP].flags == 'A':
                 # Check the Urgent flag response for uIP/Contiki
                 if urg_resp[TCP].window == 1240 or urg_resp[TCP].window == 1460:
-                    stack_name_tcp_urg = 'uIP/Contiki'
-                    match_tcp_urg = MATCH_LOW
+                    stack_name_urg = 'uIP/Contiki'
+                    match_confidence_urg = MATCH_LOW
 
                 # Check the Urgent flag response for Nut/Net
                 elif urg_resp[TCP].window == 3213:
-                    stack_name_tcp_urg = 'Nut/Net'
-                    match_tcp_urg = MATCH_LOW
+                    stack_name_urg = 'Nut/Net'
+                    match_confidence_urg = MATCH_LOW
 
                 # Check the Urgent flag response for Nucleus Net
                 elif urg_resp[TCP].window == 16000:
-                    stack_name_tcp_urg = 'Nucleus Net'
-                    match_tcp_urg = MATCH_LOW
+                    stack_name_urg = 'Nucleus Net'
+                    match_confidence_urg = MATCH_LOW
 
                 # Check the Urgent flag response for CycloneTCP
                 elif urg_resp[TCP].window == 2858:
-                    stack_name_tcp_urg = 'CycloneTCP'
-                    match_tcp_urg = MATCH_LOW
+                    stack_name_urg = 'CycloneTCP'
+                    match_confidence_urg = MATCH_LOW
 
                 # Check the Urgent flag response for NDKTCPIP
                 elif urg_resp[TCP].window == 1024:
-                    stack_name_tcp_urg = 'NDKTCPIP'
-                    match_tcp_urg = MATCH_LOW
+                    stack_name_urg = 'NDKTCPIP'
+                    match_confidence_urg = MATCH_LOW
 
                 # Check the Urgent flag response for NicheStack
                 elif urg_resp[TCP].window == 5837:
-                    stack_name_tcp_urg = 'NicheStack'
-                    match_tcp_urg = MATCH_LOW
+                    stack_name_urg = 'NicheStack'
+                    match_confidence_urg = MATCH_LOW
 
             # Check the Urgent flag response for FNET
             elif urg_resp[TCP].flags == 'FA' and urg_resp[TCP].window == 2048:
-                stack_name_tcp_urg = 'FNET'
-                match_tcp_urg = MATCH_LOW
+                stack_name_urg = 'FNET'
+                match_confidence_urg = MATCH_LOW
 
             elif urg_resp[TCP].flags == 'R':
                 # Check the Urgent flag response for PicoTCP
                 if urg_resp[TCP].window == 0:
-                    stack_name_tcp_urg = 'PicoTCP'
-                    match_tcp_urg = MATCH_LOW
+                    stack_name_urg = 'PicoTCP'
+                    match_confidence_urg = MATCH_LOW
 
             elif urg_resp[TCP].flags == 'PA':
                 # Make an additional check for NDKTCPIP, in case we are dealing with an TCP echo server
                 if urg_resp[TCP].window == 1024:
-                    stack_name_tcp_urg = 'NDKTCPIP'
-                    match_tcp_urg = MATCH_LOW
+                    stack_name_urg = 'NDKTCPIP'
+                    match_confidence_urg = MATCH_LOW
 
         # If we have a discrepancy between TCP options and TCP Urgent flag fingerprint...
-        if stack_name_tcp_opts != stack_name_tcp_urg:
-            if match_tcp_opts >= match_tcp_urg:
-                stack_name_tcp = stack_name_tcp_opts
-                match_tcp = match_tcp_opts
+        if stack_name_opts != stack_name_urg:
+            if match_confidence_opts >= match_confidence_urg:
+                stack_name = stack_name_opts
+                match_confidence = match_confidence_opts
             else:
-                stack_name_tcp = stack_name_tcp_urg
-                match_tcp = match_tcp_urg
+                stack_name = stack_name_urg
+                match_confidence = match_confidence_urg
 
         # If both fingerprints match the same stack...
         else:
-            stack_name_tcp = stack_name_tcp_opts
-            match_tcp = match_tcp_opts + match_tcp_urg
+            stack_name = stack_name_opts
+            match_confidence = match_confidence_opts + match_confidence_urg
 
     except Exception as ex:
         if 'Errno 19' in '%s' % ex:
@@ -731,7 +731,7 @@ def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, use_fw, timeout)
             subprocess.check_call(['iptables', '-D', 'OUTPUT', '-p', 'tcp',
                                    '--tcp-flags', 'RST', 'RST', '-s', '%s' % ip.src, '-j', 'DROP'])
 
-    return (stack_name_tcp, match_tcp)
+    return (stack_name, match_confidence)
 
 
 '''
@@ -776,13 +776,13 @@ if __name__ == '__main__':
         # Verbose output (can be used for troubleshooting)
         if verbose:
             print('Host IP: {}'.format(dst_host))
-            (stack_name_icmp, match_icmp) = icmpv4_probe(dst_host, timeout)
-            if stack_name_icmp:
+            (stack_name, match_confidence) = icmpv4_probe(dst_host, timeout)
+            if stack_name:
                 print('\tICMP fingerprint => {} ({} level of confidence)'.format(
-                    stack_name_icmp, match_level_str(match_icmp)))
+                    stack_name, match_level_str(match_confidence)))
             else:
                 print('\tICMP fingerprint => failed to determine the TCP/IP stack (reason: {})'.format(
-                    match_level_str(match_icmp)))
+                    match_level_str(match_confidence)))
 
             if tcp_dport != None:
                 # We send these options because while some of the stacks ignore them, some others (e.g., Nucleus Net) will
@@ -791,63 +791,63 @@ if __name__ == '__main__':
                     ('WScale', 42),
                     ('SAckOK', b''),
                 ]
-                (stack_name_tcp, match_tcp) = tcpv4_probe(dst_host, tcp_dport, interface, custom_tcp_opts, fw, timeout)
-                if stack_name_tcp:
+                (stack_name, match_confidence) = tcpv4_probe(dst_host, tcp_dport, interface, custom_tcp_opts, fw, timeout)
+                if stack_name:
                     print('\tTCP fingerprint => {} ({} level of confidence)'.format(
-                        stack_name_tcp, match_level_str(match_tcp)))
+                        stack_name, match_level_str(match_confidence)))
                 else:
                     print('\tTCP fingerprint => failed to determine the TCP/IP stack (reason: {})'.format(
-                        match_level_str(match_tcp)))
+                        match_level_str(match_confidence)))
 
             if http_dport != None:
-                (stack_name_http, match_http) = httpv4_probe(dst_host, http_dport, interface, fw, timeout)
-                if stack_name_http:
+                (stack_name, match_confidence) = httpv4_probe(dst_host, http_dport, interface, fw, timeout)
+                if stack_name:
                     print('\tHTTP fingerprint => {} ({} level of confidence)'.format(
-                        stack_name_http, match_level_str(match_http)))
+                        stack_name, match_level_str(match_confidence)))
                 else:
                     print('\tHTTP fingerprint => failed to determine the TCP/IP stack (reason: {})'.format(
-                        match_level_str(match_http)))
+                        match_level_str(match_confidence)))
 
             if ssh_dport != None:
-                (stack_name_ssh, match_ssh) = sshv4_probe(dst_host, ssh_dport, interface, fw, timeout)
-                if stack_name_ssh:
+                (stack_name, match_confidence) = sshv4_probe(dst_host, ssh_dport, interface, fw, timeout)
+                if stack_name:
                     print('\tSSH fingerprint => {} ({} level of confidence)'.format(
-                        stack_name_ssh, match_level_str(match_ssh)))
+                        stack_name, match_level_str(match_confidence)))
                 else:
                     print('\tSSH fingerprint => failed to determine the TCP/IP stack (reason: {})'.format(
-                        match_level_str(match_ssh)))
+                        match_level_str(match_confidence)))
 
             if ftp_dport != None:
-                (stack_name_ftp, match_ftp) = ftpv4_probe(dst_host, ftp_dport, interface, fw, timeout)
-                if stack_name_ftp:
+                (stack_name, match_confidence) = ftpv4_probe(dst_host, ftp_dport, interface, fw, timeout)
+                if stack_name:
                     print('\tFTP fingerprint => {} ({} level of confidence)'.format(
-                        stack_name_ftp, match_level_str(match_ftp)))
+                        stack_name, match_level_str(match_confidence)))
                 else:
                     print('\tFTP fingerprint => failed to determine the TCP/IP stack (reason: {})'.format(
-                        match_level_str(match_ftp)))
+                        match_level_str(match_confidence)))
 
         # Simplified output
         else:
             matches = []
-            (stack_name_icmp, match_icmp) = icmpv4_probe(dst_host, timeout)
-            matches.append((stack_name_icmp, match_icmp))
+            (stack_name, match_confidence) = icmpv4_probe(dst_host, timeout)
+            matches.append((stack_name, match_confidence))
 
             if tcp_dport != None:
                 custom_tcp_opts = [
                     ('WScale', 42),
                     ('SAckOK', b''),
                 ]
-                (stack_name_tcp, match_tcp) = tcpv4_probe(dst_host, tcp_dport, interface, custom_tcp_opts, fw, timeout)
-                matches.append((stack_name_tcp, match_tcp)) 
+                (stack_name, match_confidence) = tcpv4_probe(dst_host, tcp_dport, interface, custom_tcp_opts, fw, timeout)
+                matches.append((stack_name, match_confidence)) 
 
-                (stack_name_http, match_http) = httpv4_probe(dst_host, http_dport, interface, fw, timeout)
-                matches.append((stack_name_http, match_http)) 
+                (stack_name, match_confidence) = httpv4_probe(dst_host, http_dport, interface, fw, timeout)
+                matches.append((stack_name, match_confidence)) 
 
-                (stack_name_ssh, match_ssh) = sshv4_probe(dst_host, ssh_dport, interface, fw, timeout)
-                matches.append((stack_name_ssh, match_ssh)) 
+                (stack_name, match_confidence) = sshv4_probe(dst_host, ssh_dport, interface, fw, timeout)
+                matches.append((stack_name, match_confidence)) 
                 
-                (stack_name_ftp, match_ftp) = ftpv4_probe(dst_host, ssh_dport, interface, fw, timeout)
-                matches.append((stack_name_ftp, match_ftp))
+                (stack_name, match_confidence) = ftpv4_probe(dst_host, ssh_dport, interface, fw, timeout)
+                matches.append((stack_name, match_confidence))
 
                 _matches = sorted(matches, reverse=True, key=lambda x: x[1])
                 if _matches[0][0] != None:
