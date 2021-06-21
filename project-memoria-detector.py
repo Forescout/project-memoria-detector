@@ -209,7 +209,7 @@ def icmpv4_probe(dst_host, timeout):
     reply = sr1(ip/ICMP(id=0xff, seq=1, type=icmptype_i), filter='icmp[icmptype] = {}'.format(icmptype_o), timeout=timeout)
     if not reply:
         reply = sr1(ip/ICMP(id=0xff, seq=1, type=icmptype_i)/Raw(load=b'\x41'), filter='icmp[icmptype] = {}'.format(icmptype_o), timeout=timeout)
-        if reply and reply.ttl == 64:
+        if reply and (reply.ttl >= 54 and reply.ttl <= 64):
             if Raw in reply and Padding in reply and reply[Raw].load == b'\x41':
                 match = MATCH_MEDIUM
                 stack_name = 'CycloneTCP'
@@ -224,7 +224,7 @@ def icmpv4_probe(dst_host, timeout):
     #   - we first check that the TTL value of the echo packet is changed into 64 for the reply packet
     #   - we then check the payload sequence of the echo reply packet
     reply = sr1(ipv4_probe, filter='icmp[icmptype] = {}'.format(icmptype_o), timeout=timeout)
-    if reply and reply.ttl == 64:
+    if reply and (reply.ttl >= 54 and reply.ttl <= 64):
         if (hexlify(reply.load) == b'0001ff'):
             match = MATCH_HIGH
             stack_name = 'PicoTCP'
@@ -239,7 +239,7 @@ def icmpv4_probe(dst_host, timeout):
         ipv4_probe = IP(dst=dst_host, ttl=20, chksum=0xdead)/ICMP(id=_id, seq=_seq, type=icmptype_i, chksum=0xbeaf)
         reply = sr1(ipv4_probe, filter='icmp[icmptype] = {}'.format(icmptype_o), timeout=timeout)
         # TTL value must be 64 as well
-        if reply and reply.ttl == 64:
+        if reply and (reply.ttl >= 54 and reply.ttl <= 64):
             if (reply[ICMP].id == _id and reply[ICMP].seq == _seq and reply[ICMP].type == 0x00):
                 match = MATCH_MEDIUM
                 stack_name = 'Nut/Net'
@@ -265,14 +265,14 @@ def icmpv4_probe(dst_host, timeout):
                 # NDKTCPIP will reply with a TTL value of 255, the ICMP checksum will be 0xffff
                 if ICMP in pkt and pkt[ICMP].type == 0x00 and pkt[ICMP].chksum == 0xffff:
                     # NDKTCPIP will reply with a TTL value of 255, the ICMP checksum will be 0xffff
-                    if pkt.ttl == 255:
+                    if (pkt.ttl >= 245 and pkt.ttl <= 255):
                         match = MATCH_HIGH
                         stack_name = 'NDKTCPIP'
                         break
 
                     # Nucleus Net AND NicheStack will reply with a TTL value of 64, the ICMP checksum will be 0xffff.
                     # So far, we assume it is NicheStack.
-                    elif pkt.ttl == 64:
+                    elif (pkt.ttl >= 54 and pkt.ttl <= 64):
                         match = MATCH_MEDIUM
                         stack_name = 'NicheStack'
                         break
