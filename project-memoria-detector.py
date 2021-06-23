@@ -311,7 +311,7 @@ def httpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
     try:
         # We need to set up this rule in order to disable RST packets sent by the Linux kernel
         if use_fw:
-            subprocess.check_call(['iptables', '-A', 'OUTPUT', '-p', 'tcp',
+            subprocess.check_call(['iptables', '-I', 'OUTPUT', '-p', 'tcp',
                                    '--tcp-flags', 'RST', 'RST', '-s', '%s' % ip.src, '-j', 'DROP'])
 
         syn_ack = tcp_handshake(dst_host, dst_port, interface, {}, timeout)
@@ -467,7 +467,7 @@ def sshv4_probe(dst_host, dst_port, interface, use_fw, timeout):
     try:
         # We need to set up this rule in order to disable RST packets sent by the Linux kernel
         if use_fw:
-            subprocess.check_call(['iptables', '-A', 'OUTPUT', '-p', 'tcp',
+            subprocess.check_call(['iptables', '-I', 'OUTPUT', '-p', 'tcp',
                                    '--tcp-flags', 'RST', 'RST', '-s', '%s' % ip.src, '-j', 'DROP'])
 
         syn_ack = tcp_handshake(dst_host, dst_port, interface, {}, timeout)
@@ -513,7 +513,7 @@ def ftpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
     try:
         # We need to set up this rule in order to disable RST packets sent by the Linux kernel
         if use_fw:
-            subprocess.check_call(['iptables', '-A', 'OUTPUT', '-p', 'tcp',
+            subprocess.check_call(['iptables', '-I', 'OUTPUT', '-p', 'tcp',
                                    '--tcp-flags', 'RST', 'RST', '-s', '%s' % ip.src, '-j', 'DROP'])
 
         syn_ack = tcp_handshake(dst_host, dst_port, interface, {}, timeout)
@@ -588,7 +588,7 @@ def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, use_fw, timeout)
     try:
         # We need to set up this rule in order to disable RST packets sent by the Linux kernel
         if use_fw:
-            subprocess.check_call(['iptables', '-A', 'OUTPUT', '-p', 'tcp',
+            subprocess.check_call(['iptables', '-I', 'OUTPUT', '-p', 'tcp',
                                    '--tcp-flags', 'RST', 'RST', '-s', '%s' % ip.src, '-j', 'DROP'])
 
         syn_ack = tcp_handshake(
