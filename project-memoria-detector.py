@@ -802,7 +802,7 @@ if __name__ == '__main__':
         try:
             ip_addresses = ipaddress.IPv4Network(dst_hosts)
         except ValueError as ex:
-            pass
+            print(f'\nERROR: Invalid IP address range: {ex}')
     else:
         print('\nERROR: You must specify a valid IP address to scan (either the \'--in-file\', of \'ip_dst\' option.\n')
         parser.print_help()
