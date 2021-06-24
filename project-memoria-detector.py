@@ -753,7 +753,6 @@ The is the main code block
 if __name__ == '__main__':
     conf.verb = 0
     parser = argparse.ArgumentParser()
-    parser.add_argument('ip_dst', help='destination IP address')
     parser.add_argument('-p', '--tcp-port', dest='tcp_dport', default=DEFAULT_TCP_DPORT, type=int, nargs='?', help='known open TCP port (default: {})'.format(DEFAULT_TCP_DPORT))
     parser.add_argument('--http-port', dest='http_dport', default=DEFAULT_HTTP_DPORT, type=int, nargs='?', help='known open HTTP port (default: {})'.format(DEFAULT_HTTP_DPORT))
     parser.add_argument('--ssh-port', dest='ssh_dport', default=DEFAULT_SSH_DPORT, type=int, nargs='?', help='known open SSH port (default: {})'.format(DEFAULT_SSH_DPORT))
@@ -762,7 +761,9 @@ if __name__ == '__main__':
     parser.add_argument('-i', '--iface', dest='interface', default=None, nargs='?', help='interface name as shown in scapy\'s show_interfaces() function')
     parser.add_argument('-og', '--override-gateway', dest='gw', default=None, const='use_ip_dst', type=str, nargs='?', help='override gateway for ip_dst in scapy routing table')
     parser.add_argument('-fw', '--override-firewall', dest='fw', default=True, const=True, type=bool, nargs='?', help='override firewall')
-    parser.add_argument('-o', '--out-csv', dest='out_csv', default=False, nargs='?', type=str, const=True, help='output .csv file path')
+    parser.add_argument('-f', '--in-file', dest='in_file', default=None, nargs='?', type=str, help='input file path (range of IP addresses to scan)')
+    parser.add_argument('-o', '--out-csv', dest='out_csv', default=None, nargs='?', type=str, help='output .csv file path')
+    parser.add_argument('ip_dst', default=None, nargs='?', help='destination IP address')
     args = parser.parse_args()
 
     gw = None
@@ -783,74 +784,98 @@ if __name__ == '__main__':
     ftp_dport = args.ftp_dport
     timeout = args.timeout
     out_csv = args.out_csv
+    in_file = args.in_file
     fw = args.fw
 
-    if dst_hosts != None:
-        for dst_host in ipaddress.IPv4Network(dst_hosts):
-            _icmp = 'N/A'
-            _tcp  = 'N/A'
-            _http = 'N/A'
-            _ssh  = 'N/A'
-            _ftp  = 'N/A'
-            
-            dst_host = str(dst_host)
-            # Check if the host is alive before doing anything
-            if not is_target_alive(dst_host, 0.3):
-                print(f'\n{dst_host} appears to be down')
+    ip_addresses = set()
+    if in_file != None:
+        in_file = os.path.abspath(in_file)
+        with open(in_file) as _f:
+            for line in _f:
+                try: 
+                    addr = ipaddress.IPv4Address(line.replace('\n','').replace('\r',''))
+                    ip_addresses.add(addr)
+                except ipaddress.AddressValueError as ex:
+                    pass
+
+    elif dst_hosts != None:
+        try:
+            ip_addresses = ipaddress.IPv4Network(dst_hosts)
+        except ValueError as ex:
+            pass
+    else:
+        print('\nERROR: You must specify a valid IP address to scan (either the \'--in-file\', of \'ip_dst\' option.\n')
+        parser.print_help()
+        sys.exit(1)
+
+    # for ip_addr in ip_addresses:
+        # print(f'ADDR: {ip_addr}')
+
+    for dst_host in ip_addresses:
+        _icmp = 'N/A'
+        _tcp  = 'N/A'
+        _http = 'N/A'
+        _ssh  = 'N/A'
+        _ftp  = 'N/A'
+        
+        dst_host = str(dst_host)
+        # Check if the host is alive before doing anything
+        if not is_target_alive(dst_host, 0.3):
+            print(f'\n{dst_host} appears to be down')
+        else:
+            print(f'\n{dst_host} is alive')
+            (stack_name, match_confidence) = icmpv4_probe(dst_host, timeout)
+            if stack_name:
+                print(f'\tICMP => {stack_name} ({match_level_str(match_confidence)})')
+                _icmp = f'{stack_name} <- {match_level_str(match_confidence)}'
             else:
-                print(f'\n{dst_host} is alive')
-                (stack_name, match_confidence) = icmpv4_probe(dst_host, timeout)
+                print(f'\tICMP => Unknown ({match_level_str(match_confidence)})')
+                _icmp = f'Unknown <- {match_level_str(match_confidence)}'
+
+            if tcp_dport != None:
+                # We send these options because while some of the stacks ignore them, some others (e.g., Nucleus Net) will
+                # include these options (with specific values) into the reply segment
+                custom_tcp_opts = [
+                    ('WScale', 42),
+                    ('SAckOK', b''),
+                ]
+                (stack_name, match_confidence) = tcpv4_probe(dst_host, tcp_dport, interface, custom_tcp_opts, fw, timeout)
                 if stack_name:
-                    print(f'\tICMP => {stack_name} ({match_level_str(match_confidence)})')
-                    _icmp = f'{stack_name} <- {match_level_str(match_confidence)}'
+                    print(f'\tTCP => {stack_name} ({match_level_str(match_confidence)})')
+                    _tcp = f'{stack_name} <- {match_level_str(match_confidence)}'
                 else:
-                    print(f'\tICMP => Unknown ({match_level_str(match_confidence)})')
-                    _icmp = f'Unknown <- {match_level_str(match_confidence)}'
+                    print(f'\tTCP => Unknown ({match_level_str(match_confidence)})')
+                    _tcp = f'Unknown <- {match_level_str(match_confidence)}'
 
-                if tcp_dport != None:
-                    # We send these options because while some of the stacks ignore them, some others (e.g., Nucleus Net) will
-                    # include these options (with specific values) into the reply segment
-                    custom_tcp_opts = [
-                        ('WScale', 42),
-                        ('SAckOK', b''),
-                    ]
-                    (stack_name, match_confidence) = tcpv4_probe(dst_host, tcp_dport, interface, custom_tcp_opts, fw, timeout)
-                    if stack_name:
-                        print(f'\tTCP => {stack_name} ({match_level_str(match_confidence)})')
-                        _tcp = f'{stack_name} <- {match_level_str(match_confidence)}'
-                    else:
-                        print(f'\tTCP => Unknown ({match_level_str(match_confidence)})')
-                        _tcp = f'Unknown <- {match_level_str(match_confidence)}'
+            if http_dport != None:
+                (stack_name, match_confidence) = httpv4_probe(dst_host, http_dport, interface, fw, timeout)
+                if stack_name:
+                    print(f'\tHTTP => {stack_name} ({match_level_str(match_confidence)})')
+                    _http = f'{stack_name} <- {match_level_str(match_confidence)}'
+                else:
+                    print(f'\tHTTP => Unknown ({match_level_str(match_confidence)})')
+                    _http = f'Unknown <- {match_level_str(match_confidence)}'
 
-                if http_dport != None:
-                    (stack_name, match_confidence) = httpv4_probe(dst_host, http_dport, interface, fw, timeout)
-                    if stack_name:
-                        print(f'\tHTTP => {stack_name} ({match_level_str(match_confidence)})')
-                        _http = f'{stack_name} <- {match_level_str(match_confidence)}'
-                    else:
-                        print(f'\tHTTP => Unknown ({match_level_str(match_confidence)})')
-                        _http = f'Unknown <- {match_level_str(match_confidence)}'
+            if ssh_dport != None:
+                (stack_name, match_confidence) = sshv4_probe(dst_host, ssh_dport, interface, fw, timeout)
+                if stack_name:
+                    print(f'\tSSH => {stack_name} ({match_level_str(match_confidence)})')
+                    _ssh = f'{stack_name} <- {match_level_str(match_confidence)}'
+                else:
+                    print(f'\tSSH => Unknown (reason: {match_level_str(match_confidence)})')
+                    _ssh = f'Unknown <- {match_level_str(match_confidence)}'
 
-                if ssh_dport != None:
-                    (stack_name, match_confidence) = sshv4_probe(dst_host, ssh_dport, interface, fw, timeout)
-                    if stack_name:
-                        print(f'\tSSH => {stack_name} ({match_level_str(match_confidence)})')
-                        _ssh = f'{stack_name} <- {match_level_str(match_confidence)}'
-                    else:
-                        print(f'\tSSH => Unknown (reason: {match_level_str(match_confidence)})')
-                        _ssh = f'Unknown <- {match_level_str(match_confidence)}'
+            if ftp_dport != None:
+                (stack_name, match_confidence) = ftpv4_probe(dst_host, ftp_dport, interface, fw, timeout)
+                if stack_name:
+                    print(f'\tFTP => {stack_name} ({match_level_str(match_confidence)})')
+                    _ftp = f'{stack_name} <- {match_level_str(match_confidence)}'
+                else:
+                    print(f'\tFTP => Unknown (reason: {match_level_str(match_confidence)})')
+                    _ftp = f'Unknown <- {match_level_str(match_confidence)}'
 
-                if ftp_dport != None:
-                    (stack_name, match_confidence) = ftpv4_probe(dst_host, ftp_dport, interface, fw, timeout)
-                    if stack_name:
-                        print(f'\tFTP => {stack_name} ({match_level_str(match_confidence)})')
-                        _ftp = f'{stack_name} <- {match_level_str(match_confidence)}'
-                    else:
-                        print(f'\tFTP => Unknown (reason: {match_level_str(match_confidence)})')
-                        _ftp = f'Unknown <- {match_level_str(match_confidence)}'
-
-                if out_csv:
-                    with open(os.path.abspath(out_csv), 'a') as _f:
-                        data = [dst_host, _icmp, _tcp, _http, _ssh, _ftp]
-                        writer = csv.writer(_f)
-                        writer.writerow(data)
+            if out_csv:
+                with open(os.path.abspath(out_csv), 'a') as _f:
+                    data = [dst_host, _icmp, _tcp, _http, _ssh, _ftp]
+                    writer = csv.writer(_f)
+                    writer.writerow(data)
