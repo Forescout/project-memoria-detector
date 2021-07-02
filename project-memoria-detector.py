@@ -97,15 +97,6 @@ nutnet_tcp_opts = [
     ('MSS', 536),
 ]
 
-nucleus_net_tcp_opts = [
-    ('MSS', 1460),
-    ('SAckOK', b''),
-    ('WScale', 0),
-    ('NOP', None),
-    ('NOP', None),
-    ('NOP', None),
-]
-
 cyclone_tcp_opts = [
     ('MSS', 1430),
 ]
@@ -254,11 +245,10 @@ def icmpv4_probe(dst_host, timeout):
         icmp_raw = b'\x08\x00\xf7\xff'
         ipv4_probe = ip/Raw(load=icmp_raw)
         # For some reason Scapy will not get the reply to this packet, so I had to use asynchronous sniffing
-
         t = AsyncSniffer(iface=interface)
         t.start()
         send(ipv4_probe)
-        time.sleep(timeout*4)
+        time.sleep(timeout)
         pkts = t.stop()
 
         for pkt in pkts:
@@ -274,7 +264,7 @@ def icmpv4_probe(dst_host, timeout):
 
                     # Nucleus Net AND NicheStack will reply with a TTL value of 64, the ICMP checksum will be 0xffff.
                     # So far, we assume it is NicheStack.
-                    elif (pkt.ttl >= 54 and pkt.ttl <= 64):
+                    elif (pkt.ttl <= 64):
                         match = MATCH_MEDIUM
                         stack_name = 'NicheStack'
                         break
@@ -287,7 +277,7 @@ def icmpv4_probe(dst_host, timeout):
         t = AsyncSniffer(iface=interface)
         t.start()
         send(ipv4_probe)
-        time.sleep(timeout*4)
+        time.sleep(timeout)
         pkts = t.stop()
         for pkt in pkts:
             # first, let's check the source and the destination IP
@@ -609,7 +599,6 @@ def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, use_fw, timeout)
 
         nutnet_tcp_opts_match = check_tcp_options(syn_ack[TCP].options, nutnet_tcp_opts)
 
-        nucleus_net_tcp_opts_match = check_tcp_options(syn_ack[TCP].options, nucleus_net_tcp_opts)
         
         cyclone_tcp_opts_match = check_tcp_options(syn_ack[TCP].options, cyclone_tcp_opts)
         timeout2 = timeout
@@ -636,11 +625,6 @@ def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, use_fw, timeout)
             match_confidence_opts = MATCH_LOW
             stack_name_opts = 'Nut/Net'
 
-        # Check TCP options for Nucleus Net
-        elif nucleus_net_tcp_opts_match:
-            match_confidence_opts = MATCH_LOW
-            stack_name_opts = 'Nucleus Net'
-
         # Check TCP options for CycloneTCP
         elif cyclone_tcp_opts_match:
             match_confidence_opts = MATCH_LOW
@@ -661,7 +645,7 @@ def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, use_fw, timeout)
         if urg_resp:
             if urg_resp[TCP].flags == 'A':
                 # Check the Urgent flag response for uIP/Contiki
-                if urg_resp[TCP].window == 1240 or urg_resp[TCP].window == 1460:
+                if urg_resp[TCP].window in [1240, 1460]:
                     stack_name_urg = 'uIP/Contiki'
                     match_confidence_urg = MATCH_LOW
 
@@ -686,7 +670,7 @@ def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, use_fw, timeout)
                     match_confidence_urg = MATCH_LOW
 
                 # Check the Urgent flag response for NicheStack
-                elif urg_resp[TCP].window == 5837:
+                elif urg_resp[TCP].window in [2048, 3000, 3072, 5840, 8192, 1160, 16384]:
                     stack_name_urg = 'NicheStack'
                     match_confidence_urg = MATCH_LOW
 
@@ -833,13 +817,7 @@ if __name__ == '__main__':
                 _icmp = f'Unknown <- {match_level_str(match_confidence)}'
 
             if tcp_dport != None:
-                # We send these options because while some of the stacks ignore them, some others (e.g., Nucleus Net) will
-                # include these options (with specific values) into the reply segment
-                custom_tcp_opts = [
-                    ('WScale', 42),
-                    ('SAckOK', b''),
-                ]
-                (stack_name, match_confidence) = tcpv4_probe(dst_host, tcp_dport, interface, custom_tcp_opts, fw, timeout)
+                (stack_name, match_confidence) = tcpv4_probe(dst_host, tcp_dport, interface, [], fw, timeout)
                 if stack_name:
                     print(f'\tTCP => {stack_name} ({match_level_str(match_confidence)})')
                     _tcp = f'{stack_name} <- {match_level_str(match_confidence)}'
