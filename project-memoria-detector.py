@@ -50,10 +50,12 @@ import time
 import re
 from binascii import hexlify
 import logging
-
-from scapy.all import conf, send, sr1, sniff, IP, ICMP, TCP, Raw, RandShort, Padding, AsyncSniffer
-
 logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
+from scapy.all import conf, send, sr1, sniff, IP, ICMP, TCP, Raw, RandShort, Padding, AsyncSniffer
+import ipaddress
+import csv
+import os
+
 
 DEFAULT_TCP_DPORT = 80
 DEFAULT_HTTP_DPORT = 80
@@ -93,15 +95,6 @@ uip_tcp_opts = [
 
 nutnet_tcp_opts = [
     ('MSS', 536),
-]
-
-nucleus_net_tcp_opts = [
-    ('MSS', 1460),
-    ('SAckOK', b''),
-    ('WScale', 0),
-    ('NOP', None),
-    ('NOP', None),
-    ('NOP', None),
 ]
 
 cyclone_tcp_opts = [
@@ -252,11 +245,10 @@ def icmpv4_probe(dst_host, timeout):
         icmp_raw = b'\x08\x00\xf7\xff'
         ipv4_probe = ip/Raw(load=icmp_raw)
         # For some reason Scapy will not get the reply to this packet, so I had to use asynchronous sniffing
-
         t = AsyncSniffer(iface=interface)
         t.start()
         send(ipv4_probe)
-        time.sleep(timeout*4)
+        time.sleep(timeout)
         pkts = t.stop()
 
         for pkt in pkts:
@@ -272,7 +264,7 @@ def icmpv4_probe(dst_host, timeout):
 
                     # Nucleus Net AND NicheStack will reply with a TTL value of 64, the ICMP checksum will be 0xffff.
                     # So far, we assume it is NicheStack.
-                    elif (pkt.ttl >= 54 and pkt.ttl <= 64):
+                    elif (pkt.ttl <= 64):
                         match = MATCH_MEDIUM
                         stack_name = 'NicheStack'
                         break
@@ -285,7 +277,7 @@ def icmpv4_probe(dst_host, timeout):
         t = AsyncSniffer(iface=interface)
         t.start()
         send(ipv4_probe)
-        time.sleep(timeout*4)
+        time.sleep(timeout)
         pkts = t.stop()
         for pkt in pkts:
             # first, let's check the source and the destination IP
@@ -607,7 +599,6 @@ def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, use_fw, timeout)
 
         nutnet_tcp_opts_match = check_tcp_options(syn_ack[TCP].options, nutnet_tcp_opts)
 
-        nucleus_net_tcp_opts_match = check_tcp_options(syn_ack[TCP].options, nucleus_net_tcp_opts)
         
         cyclone_tcp_opts_match = check_tcp_options(syn_ack[TCP].options, cyclone_tcp_opts)
         timeout2 = timeout
@@ -634,11 +625,6 @@ def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, use_fw, timeout)
             match_confidence_opts = MATCH_LOW
             stack_name_opts = 'Nut/Net'
 
-        # Check TCP options for Nucleus Net
-        elif nucleus_net_tcp_opts_match:
-            match_confidence_opts = MATCH_LOW
-            stack_name_opts = 'Nucleus Net'
-
         # Check TCP options for CycloneTCP
         elif cyclone_tcp_opts_match:
             match_confidence_opts = MATCH_LOW
@@ -659,7 +645,7 @@ def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, use_fw, timeout)
         if urg_resp:
             if urg_resp[TCP].flags == 'A':
                 # Check the Urgent flag response for uIP/Contiki
-                if urg_resp[TCP].window == 1240 or urg_resp[TCP].window == 1460:
+                if urg_resp[TCP].window in [1240, 1460]:
                     stack_name_urg = 'uIP/Contiki'
                     match_confidence_urg = MATCH_LOW
 
@@ -684,7 +670,7 @@ def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, use_fw, timeout)
                     match_confidence_urg = MATCH_LOW
 
                 # Check the Urgent flag response for NicheStack
-                elif urg_resp[TCP].window == 5837:
+                elif urg_resp[TCP].window in [2048, 3000, 3072, 5840, 8192, 1160, 16384]:
                     stack_name_urg = 'NicheStack'
                     match_confidence_urg = MATCH_LOW
 
@@ -734,22 +720,34 @@ def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, use_fw, timeout)
     return (stack_name, match_confidence)
 
 
+def is_target_alive(ip_addr, timeout):
+    ip = IP(dst=ip_addr, ttl=64, proto=0x01)
+
+    std_icmp_payload = b'\xcd\x69\x08\x00\x00\x00\x00\x00\x10\x11\x12\x13\x14\x15\x16\x17' \
+                       b'\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x20\x21\x22\x23\x24\x25\x26\x27' \
+                       b'\x28\x29\x2a\x2b\x2c\x2d\x2e\x2f\x30\x31\x32\x33\x34\x35\x36\x37'
+
+    reply = sr1(ip/ICMP(id=0xff, seq=1, type=0x8)/Raw(load=std_icmp_payload), filter='icmp[icmptype] = {}'.format(0x0), timeout=timeout, verbose=0)
+    return False if not reply else True
+
+
 '''
 The is the main code block
 '''
 if __name__ == '__main__':
     conf.verb = 0
     parser = argparse.ArgumentParser()
-    parser.add_argument('ip_dst', help='destination IP address')
     parser.add_argument('-p', '--tcp-port', dest='tcp_dport', default=DEFAULT_TCP_DPORT, type=int, nargs='?', help='known open TCP port (default: {})'.format(DEFAULT_TCP_DPORT))
     parser.add_argument('--http-port', dest='http_dport', default=DEFAULT_HTTP_DPORT, type=int, nargs='?', help='known open HTTP port (default: {})'.format(DEFAULT_HTTP_DPORT))
     parser.add_argument('--ssh-port', dest='ssh_dport', default=DEFAULT_SSH_DPORT, type=int, nargs='?', help='known open SSH port (default: {})'.format(DEFAULT_SSH_DPORT))
     parser.add_argument('--ftp-port', dest='ftp_dport', default=DEFAULT_FTP_DPORT, type=int, nargs='?', help='known open FTP port (default: {})'.format(DEFAULT_FTP_DPORT))
     parser.add_argument('-t', '--timeout', dest='timeout', default=DEFAULT_TIMEOUT, type=int, nargs='?', help='timeout (default: {})'.format(DEFAULT_TIMEOUT))
     parser.add_argument('-i', '--iface', dest='interface', default=None, nargs='?', help='interface name as shown in scapy\'s show_interfaces() function')
-    parser.add_argument('-v', '--verbose', dest='verbose', default=False, nargs='?', type=bool, const=True, help='provide verbose output')
     parser.add_argument('-og', '--override-gateway', dest='gw', default=None, const='use_ip_dst', type=str, nargs='?', help='override gateway for ip_dst in scapy routing table')
     parser.add_argument('-fw', '--override-firewall', dest='fw', default=True, const=True, type=bool, nargs='?', help='override firewall')
+    parser.add_argument('-f', '--in-file', dest='in_file', default=None, nargs='?', type=str, help='input file path (range of IP addresses to scan)')
+    parser.add_argument('-o', '--out-csv', dest='out_csv', default=None, nargs='?', type=str, help='output .csv file path')
+    parser.add_argument('ip_dst', default=None, nargs='?', help='destination IP address')
     args = parser.parse_args()
 
     gw = None
@@ -763,96 +761,100 @@ if __name__ == '__main__':
         conf.route.add(host=(args.ip_dst), gw=gw)
 
     interface = args.interface
-    dst_host = args.ip_dst
+    dst_hosts = args.ip_dst
     tcp_dport = args.tcp_dport
     http_dport = args.http_dport
     ssh_dport = args.ssh_dport
     ftp_dport = args.ftp_dport
     timeout = args.timeout
+    out_csv = args.out_csv
+    in_file = args.in_file
     fw = args.fw
-    verbose = args.verbose
 
-    if dst_host != None:
-        # Verbose output (can be used for troubleshooting)
-        if verbose:
-            print('Host IP: {}'.format(dst_host))
+    ip_addresses = set()
+    if in_file != None:
+        in_file = os.path.abspath(in_file)
+        with open(in_file) as _f:
+            for line in _f:
+                try: 
+                    addr = ipaddress.IPv4Address(line.replace('\n','').replace('\r',''))
+                    ip_addresses.add(addr)
+                except ipaddress.AddressValueError as ex:
+                    pass
+
+    elif dst_hosts != None:
+        try:
+            ip_addresses = ipaddress.IPv4Network(dst_hosts)
+        except ValueError as ex:
+            print(f'\nERROR: Invalid IP address range: {ex}')
+    else:
+        print('\nERROR: You must specify a valid IP address to scan (either the \'--in-file\', of \'ip_dst\' option.\n')
+        parser.print_help()
+        sys.exit(1)
+
+    for dst_host in ip_addresses:
+        _icmp = 'N/A'
+        _tcp  = 'N/A'
+        _http = 'N/A'
+        _ssh  = 'N/A'
+        _ftp  = 'N/A'
+        
+        dst_host = str(dst_host)
+        # exclude broadcast addresses
+        if dst_host.endswith('.0') or dst_host.endswith('.255'):
+            continue
+
+        # Check if the host is alive before doing anything
+        if not is_target_alive(dst_host, 0.3):
+            print(f'\n{dst_host} appears to be down')
+        else:
+            print(f'\n{dst_host} is alive')
             (stack_name, match_confidence) = icmpv4_probe(dst_host, timeout)
             if stack_name:
-                print('\tICMP fingerprint => {} ({} level of confidence)'.format(
-                    stack_name, match_level_str(match_confidence)))
+                print(f'\tICMP => {stack_name} ({match_level_str(match_confidence)})')
+                _icmp = f'{stack_name} <- {match_level_str(match_confidence)}'
             else:
-                print('\tICMP fingerprint => failed to determine the TCP/IP stack (reason: {})'.format(
-                    match_level_str(match_confidence)))
+                print(f'\tICMP => Unknown ({match_level_str(match_confidence)})')
+                _icmp = f'Unknown <- {match_level_str(match_confidence)}'
 
             if tcp_dport != None:
-                # We send these options because while some of the stacks ignore them, some others (e.g., Nucleus Net) will
-                # include these options (with specific values) into the reply segment
-                custom_tcp_opts = [
-                    ('WScale', 42),
-                    ('SAckOK', b''),
-                ]
-                (stack_name, match_confidence) = tcpv4_probe(dst_host, tcp_dport, interface, custom_tcp_opts, fw, timeout)
+                (stack_name, match_confidence) = tcpv4_probe(dst_host, tcp_dport, interface, [], fw, timeout)
                 if stack_name:
-                    print('\tTCP fingerprint => {} ({} level of confidence)'.format(
-                        stack_name, match_level_str(match_confidence)))
+                    print(f'\tTCP => {stack_name} ({match_level_str(match_confidence)})')
+                    _tcp = f'{stack_name} <- {match_level_str(match_confidence)}'
                 else:
-                    print('\tTCP fingerprint => failed to determine the TCP/IP stack (reason: {})'.format(
-                        match_level_str(match_confidence)))
+                    print(f'\tTCP => Unknown ({match_level_str(match_confidence)})')
+                    _tcp = f'Unknown <- {match_level_str(match_confidence)}'
 
             if http_dport != None:
                 (stack_name, match_confidence) = httpv4_probe(dst_host, http_dport, interface, fw, timeout)
                 if stack_name:
-                    print('\tHTTP fingerprint => {} ({} level of confidence)'.format(
-                        stack_name, match_level_str(match_confidence)))
+                    print(f'\tHTTP => {stack_name} ({match_level_str(match_confidence)})')
+                    _http = f'{stack_name} <- {match_level_str(match_confidence)}'
                 else:
-                    print('\tHTTP fingerprint => failed to determine the TCP/IP stack (reason: {})'.format(
-                        match_level_str(match_confidence)))
+                    print(f'\tHTTP => Unknown ({match_level_str(match_confidence)})')
+                    _http = f'Unknown <- {match_level_str(match_confidence)}'
 
             if ssh_dport != None:
                 (stack_name, match_confidence) = sshv4_probe(dst_host, ssh_dport, interface, fw, timeout)
                 if stack_name:
-                    print('\tSSH fingerprint => {} ({} level of confidence)'.format(
-                        stack_name, match_level_str(match_confidence)))
+                    print(f'\tSSH => {stack_name} ({match_level_str(match_confidence)})')
+                    _ssh = f'{stack_name} <- {match_level_str(match_confidence)}'
                 else:
-                    print('\tSSH fingerprint => failed to determine the TCP/IP stack (reason: {})'.format(
-                        match_level_str(match_confidence)))
+                    print(f'\tSSH => Unknown ({match_level_str(match_confidence)})')
+                    _ssh = f'Unknown <- {match_level_str(match_confidence)}'
 
             if ftp_dport != None:
                 (stack_name, match_confidence) = ftpv4_probe(dst_host, ftp_dport, interface, fw, timeout)
                 if stack_name:
-                    print('\tFTP fingerprint => {} ({} level of confidence)'.format(
-                        stack_name, match_level_str(match_confidence)))
+                    print(f'\tFTP => {stack_name} ({match_level_str(match_confidence)})')
+                    _ftp = f'{stack_name} <- {match_level_str(match_confidence)}'
                 else:
-                    print('\tFTP fingerprint => failed to determine the TCP/IP stack (reason: {})'.format(
-                        match_level_str(match_confidence)))
+                    print(f'\tFTP => Unknown ({match_level_str(match_confidence)})')
+                    _ftp = f'Unknown <- {match_level_str(match_confidence)}'
 
-        # Simplified output
-        else:
-            matches = []
-            (stack_name, match_confidence) = icmpv4_probe(dst_host, timeout)
-            matches.append((stack_name, match_confidence))
-
-            if tcp_dport != None:
-                custom_tcp_opts = [
-                    ('WScale', 42),
-                    ('SAckOK', b''),
-                ]
-                (stack_name, match_confidence) = tcpv4_probe(dst_host, tcp_dport, interface, custom_tcp_opts, fw, timeout)
-                matches.append((stack_name, match_confidence)) 
-
-                (stack_name, match_confidence) = httpv4_probe(dst_host, http_dport, interface, fw, timeout)
-                matches.append((stack_name, match_confidence)) 
-
-                (stack_name, match_confidence) = sshv4_probe(dst_host, ssh_dport, interface, fw, timeout)
-                matches.append((stack_name, match_confidence)) 
-                
-                (stack_name, match_confidence) = ftpv4_probe(dst_host, ssh_dport, interface, fw, timeout)
-                matches.append((stack_name, match_confidence))
-
-                _matches = sorted(matches, reverse=True, key=lambda x: x[1])
-                if _matches[0][0] != None:
-                    print('\tHost {} runs {} TCP/IP stack ({} level of confidence)'.format(
-                        dst_host, _matches[0][0], match_level_str(_matches[0][1])))
-                else:
-                    print('\tFailed to determine the TCP/IP stack for host {} (reason: {})'.format(
-                        dst_host, match_level_str(_matches[0][1])))
+            if out_csv:
+                with open(os.path.abspath(out_csv), 'a') as _f:
+                    data = [dst_host, _icmp, _tcp, _http, _ssh, _ftp]
+                    writer = csv.writer(_f)
+                    writer.writerow(data)

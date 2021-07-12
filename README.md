@@ -49,12 +49,12 @@ If python is already installed on your machine, to install the required dependen
 $ pip install -r requirements.txt
 ```
 
-## Usage
+## Basic usage
 
 As Scapy requires root privileges to run, the tool must be run with `sudo`, e.g.:
 
 ```bash
-$ sudo -E python project-memoria-detector.py [options]
+$ sudo python project-memoria-detector.py [options]
 ```
 
 To see the available options for running the script, run it with the `-h` option:
@@ -63,68 +63,58 @@ To see the available options for running the script, run it with the `-h` option
 $ python project-memoria-detector.py -h
 ```
 
-In general, the script requires at least the following three options: (1) the IP address of the target device (`-ip_dst`), an open TCP port (`-p` or `--tcp-port`), and the target network interface (`-i`). For example:
+In general, the script requires at least a single the IP address of the target device (this parameter can be explicitly specified with `-ip_dst`)
 
 ```bash
-$ sudo -E python project-memoria-detector.py -ip_dst 192.168.212.42 -p 80 -i eth1
+$ sudo python project-memoria-detector.py 192.168.3.1
+```
+
+The script supports scanning ranges of IP addresses. You can either specify a subnet to scan using the CIDR notation, or provide a .txt file with a set of IP addresses to scan.
+
+The CIDR notation can be used as follows (for this example, the IP addresses from 192.168.3.1 to 192.168.3.254 will be scanned:
+
+```bash
+$ sudo python project-memoria-detector.py 192.168.3.0/24
+```
+
+You can also use a .txt file in order to specify the IP addresses of interest: each IP address in this file must start with a new line. For example, we can create a file called `input.txt` with the following contents:
+
+```bash
+$ cat input.txt
+192.168.1.8
+192.168.1.9
+192.168.3.1
+192.168.2.14
+```
+
+We can then run the script as follows:
+
+```bash
+$ sudo python project-memoria-detector.py --in-file input.txt
 ```
 
 The script uses default values for ports to fingerprint different protocols such as SSH (22), FTP (21) and HTTP (80). In order to overwrite these default values, you are able to do so by setting the flags like:
+
 ```bash
-$ sudo -E python project-memoria-detector.py -ip_dst 192.168.212.42 --http-port 80 --ssh-port 22 --ftp-port 21 -i eth1
+$ sudo python project-memoria-detector.py -ip_dst 192.168.212.42 --tcp-port 80 --http-port 80 --ssh-port 22 --ftp-port 21 -i eth1
 ```
 
 ## Interpreting the results 
 
-By default, the script will output only the name of a matched TCP/IP stack and the level of certainty of the match (high, medium, low). In this case, the tool will assess all available fingerprint matches and make a decision about which stack it is, based on the fingerprint that has the highest level of confidence. For example:
+The script will output matches to individual fingerprints as well as degree of certainty in round brackets: 
 
 ```bash
-$ sudo -E python project-memoria-detector.py -ip_dst 192.168.212.42 -p 80 -i eth1
-    Host 192.168.212.42 runs uIP/Contiki TCP/IP stack (High level of confidence)
+$ sudo python project-memoria-detector.py 192.168.6.42
+
+192.168.6.42 is alive
+        ICMP => uIP/Contiki (High)
+        TCP => uIP/Contiki (Medium)
+        HTTP => uIP/Contiki (High)
+        SSH => Unknown (No match)
+        FTP => Unknown (No reply)
 ```
 
-However, if you wish to see the matches for individual fingerprints (ICMP, TCP, and HTTP), add the `-v` flag (or `--verbose`). This will produce the output like this:
-
-```bash
-$ sudo -E python project-memoria-detector.py -ip_dst 192.168.212.42 -p 80 --http-port 80 -i eth1 -v
-Host IP: 192.168.212.42
-        ICMP fingerprint => uIP/Contiki (High level of confidence)
-        TCP fingerprint => uIP/Contiki (Medium level of confidence)
-        HTTP fingerprint => uIP/Contiki (High level of confidence)
-        SSH fingerprint => failed to determine the TCP/IP stack (reason: No reply)
-        FTP fingerprint => failed to determine the TCP/IP stack (reason: No reply)
-```
-
-In cases when some of the fingerprints do not match, the tool produces an output similar to the following (in this example the target device did not match any of the TCP and HTTP fingerprints, but there was a match with the ICMP fingerprints):
-
-```bash
-$ sudo -E python project-memoria-detector.py -ip_dst 192.168.212.42 -p 80 -i eth1
-    Host 192.168.212.42 runs uIP/Contiki TCP/IP stack (High level of confidence)
-
-$ sudo -E python project-memoria-detector.py -ip_dst 192.168.212.42 -p 80 -i eth1 -v
-Host IP: 192.168.212.42
-        ICMP fingerprint => uIP/Contiki (High level of confidence)
-        TCP fingerprint => failed to determine the TCP/IP stack (reason: No match)
-        HTTP fingerprint => failed to determine the TCP/IP stack (reason: No match)
-        SSH fingerprint => failed to determine the TCP/IP stack (reason: No reply)
-        FTP fingerprint => failed to determine the TCP/IP stack (reason: No reply)
-```
-
-In case there is no reply to ICMP and/or TCP messages (e.g., the device is offline, and/or it does not respond to ICMP echo requests, and/or there are no open TCP ports), the output may look like this:
-
-```bash
-$ sudo -E python project-memoria-detector.py -ip_dst 192.168.212.42 -p 80 -i eth1
-    Failed to determine the TCP/IP stack for host 192.168.212.42 (reason: No reply)
-
-$ sudo -E python project-memoria-detector.py -ip_dst 192.168.212.42 -p 80 --http-port 80 -i eth1 -v
-Host IP: 192.168.212.42
-        ICMP fingerprint => failed to determine the TCP/IP stack (reason: No reply)
-        TCP fingerprint => failed to determine the TCP/IP stack (reason: No reply)
-        HTTP fingerprint => failed to determine the TCP/IP stack (reason: No reply)
-        SSH fingerprint => failed to determine the TCP/IP stack (reason: No reply)
-        FTP fingerprint => failed to determine the TCP/IP stack (reason: No reply)
-```
-
+The degree of certainty of a particular fingerprint can be `High`, `Medium`, or `Low`. `No match` means that there was no match with any known fingerprints, and `No reply` means that a specific port/service is unavailable.
 
 ## License
 
