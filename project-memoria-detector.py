@@ -792,9 +792,6 @@ if __name__ == '__main__':
         parser.print_help()
         sys.exit(1)
 
-    # for ip_addr in ip_addresses:
-        # print(f'ADDR: {ip_addr}')
-
     for dst_host in ip_addresses:
         _icmp = 'N/A'
         _tcp  = 'N/A'
@@ -803,6 +800,10 @@ if __name__ == '__main__':
         _ftp  = 'N/A'
         
         dst_host = str(dst_host)
+        # exclude broadcast addresses
+        if dst_host.endswith('.0') or dst_host.endswith('.255'):
+            continue
+
         # Check if the host is alive before doing anything
         if not is_target_alive(dst_host, 0.3):
             print(f'\n{dst_host} appears to be down')
@@ -840,7 +841,7 @@ if __name__ == '__main__':
                     print(f'\tSSH => {stack_name} ({match_level_str(match_confidence)})')
                     _ssh = f'{stack_name} <- {match_level_str(match_confidence)}'
                 else:
-                    print(f'\tSSH => Unknown (reason: {match_level_str(match_confidence)})')
+                    print(f'\tSSH => Unknown ({match_level_str(match_confidence)})')
                     _ssh = f'Unknown <- {match_level_str(match_confidence)}'
 
             if ftp_dport != None:
@@ -849,7 +850,7 @@ if __name__ == '__main__':
                     print(f'\tFTP => {stack_name} ({match_level_str(match_confidence)})')
                     _ftp = f'{stack_name} <- {match_level_str(match_confidence)}'
                 else:
-                    print(f'\tFTP => Unknown (reason: {match_level_str(match_confidence)})')
+                    print(f'\tFTP => Unknown ({match_level_str(match_confidence)})')
                     _ftp = f'Unknown <- {match_level_str(match_confidence)}'
 
             if out_csv:
