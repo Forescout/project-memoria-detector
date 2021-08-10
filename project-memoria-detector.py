@@ -294,15 +294,14 @@ def icmpv4_probe(dst_host, timeout):
 This function attempts to actively fingerprint the usage of embedded TCP/IP stacks via specific HTTP signatures.
 '''
 
-def httpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
+def httpv4_probe(dst_host, dst_port, interface, skip_iptables, timeout):
     stack_name = None
     match_confidence = MATCH_NO_MATCH
 
     ip = IP(version=0x4, id=0x00fb, dst=dst_host)
-
     try:
         # We need to set up this rule in order to disable RST packets sent by the Linux kernel
-        if use_fw:
+        if skip_iptables == False:
             subprocess.check_call(['iptables', '-I', 'OUTPUT', '-p', 'tcp',
                                    '--tcp-flags', 'RST', 'RST', '-s', '%s' % ip.src, '-j', 'DROP'])
 
@@ -439,7 +438,7 @@ def httpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
 
     finally:
         # Cleanup the iptables rule
-        if use_fw:
+        if skip_iptables == False:
             subprocess.check_call(['iptables', '-D', 'OUTPUT', '-p', 'tcp',
                                    '--tcp-flags', 'RST', 'RST', '-s', '%s' % ip.src, '-j', 'DROP'])
 
@@ -450,7 +449,7 @@ def httpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
 This function attempts to actively fingerprint the usage of embedded TCP/IP stacks via specific SSH signatures.
 '''
 
-def sshv4_probe(dst_host, dst_port, interface, use_fw, timeout):
+def sshv4_probe(dst_host, dst_port, interface, skip_iptables, timeout):
     stack_name = None
     match_confidence = MATCH_NO_MATCH
 
@@ -458,7 +457,7 @@ def sshv4_probe(dst_host, dst_port, interface, use_fw, timeout):
 
     try:
         # We need to set up this rule in order to disable RST packets sent by the Linux kernel
-        if use_fw:
+        if skip_iptables == False:
             subprocess.check_call(['iptables', '-I', 'OUTPUT', '-p', 'tcp',
                                    '--tcp-flags', 'RST', 'RST', '-s', '%s' % ip.src, '-j', 'DROP'])
 
@@ -485,7 +484,7 @@ def sshv4_probe(dst_host, dst_port, interface, use_fw, timeout):
 
     finally:
         # Cleanup the iptables rule
-        if use_fw:
+        if skip_iptables == False:
             subprocess.check_call(['iptables', '-D', 'OUTPUT', '-p', 'tcp',
                                    '--tcp-flags', 'RST', 'RST', '-s', '%s' % ip.src, '-j', 'DROP'])
 
@@ -496,7 +495,7 @@ def sshv4_probe(dst_host, dst_port, interface, use_fw, timeout):
 This function attempts to actively fingerprint the usage of embedded TCP/IP stacks via specific FTP signatures.
 '''
 
-def ftpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
+def ftpv4_probe(dst_host, dst_port, interface, skip_iptables, timeout):
     stack_name = None
     match_confidence = MATCH_NO_MATCH
 
@@ -504,7 +503,7 @@ def ftpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
 
     try:
         # We need to set up this rule in order to disable RST packets sent by the Linux kernel
-        if use_fw:
+        if skip_iptables == False:
             subprocess.check_call(['iptables', '-I', 'OUTPUT', '-p', 'tcp',
                                    '--tcp-flags', 'RST', 'RST', '-s', '%s' % ip.src, '-j', 'DROP'])
 
@@ -555,7 +554,7 @@ def ftpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
 
     finally:
         # Cleanup the iptables rule
-        if use_fw:
+        if skip_iptables == False:
             subprocess.check_call(['iptables', '-D', 'OUTPUT', '-p', 'tcp',
                                    '--tcp-flags', 'RST', 'RST', '-s', '%s' % ip.src, '-j', 'DROP'])
 
@@ -566,7 +565,7 @@ def ftpv4_probe(dst_host, dst_port, interface, use_fw, timeout):
 This function attempts to actively fingerprint the usage of embedded TCP/IP stacks via specific TCP signatures.
 '''
 
-def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, use_fw, timeout):
+def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, skip_iptables, timeout):
     stack_name = None
     stack_name_opts = None
     stack_name_urg = None
@@ -579,7 +578,7 @@ def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, use_fw, timeout)
 
     try:
         # We need to set up this rule in order to disable RST packets sent by the Linux kernel
-        if use_fw:
+        if skip_iptables == False:
             subprocess.check_call(['iptables', '-I', 'OUTPUT', '-p', 'tcp',
                                    '--tcp-flags', 'RST', 'RST', '-s', '%s' % ip.src, '-j', 'DROP'])
 
@@ -713,7 +712,7 @@ def tcpv4_probe(dst_host, dst_port, interface, custom_tcp_opts, use_fw, timeout)
 
     finally:
         # Cleanup the iptables rule
-        if use_fw:
+        if skip_iptables == False:
             subprocess.check_call(['iptables', '-D', 'OUTPUT', '-p', 'tcp',
                                    '--tcp-flags', 'RST', 'RST', '-s', '%s' % ip.src, '-j', 'DROP'])
 
@@ -744,7 +743,7 @@ if __name__ == '__main__':
     parser.add_argument('-t', '--timeout', dest='timeout', default=DEFAULT_TIMEOUT, type=int, nargs='?', help='timeout (default: {})'.format(DEFAULT_TIMEOUT))
     parser.add_argument('-i', '--iface', dest='interface', default=None, nargs='?', help='interface name as shown in scapy\'s show_interfaces() function')
     parser.add_argument('-og', '--override-gateway', dest='gw', default=None, const='use_ip_dst', type=str, nargs='?', help='override gateway for ip_dst in scapy routing table')
-    parser.add_argument('-fw', '--override-firewall', dest='fw', default=True, const=True, type=bool, nargs='?', help='override firewall')
+    parser.add_argument('-st', '--skip-iptables', dest='skip_iptables', default=False, action='store_true', help='do not use iptables to block RST packets')
     parser.add_argument('-f', '--in-file', dest='in_file', default=None, nargs='?', type=str, help='input file path (range of IP addresses to scan)')
     parser.add_argument('-o', '--out-csv', dest='out_csv', default=None, nargs='?', type=str, help='output .csv file path')
     parser.add_argument('ip_dst', default=None, nargs='?', help='destination IP address')
@@ -769,7 +768,7 @@ if __name__ == '__main__':
     timeout = args.timeout
     out_csv = args.out_csv
     in_file = args.in_file
-    fw = args.fw
+    skip_iptables = args.skip_iptables
 
     ip_addresses = set()
     if in_file != None:
@@ -818,7 +817,7 @@ if __name__ == '__main__':
                 _icmp = f'Unknown <- {match_level_str(match_confidence)}'
 
             if tcp_dport != None:
-                (stack_name, match_confidence) = tcpv4_probe(dst_host, tcp_dport, interface, [], fw, timeout)
+                (stack_name, match_confidence) = tcpv4_probe(dst_host, tcp_dport, interface, [], skip_iptables, timeout)
                 if stack_name:
                     print(f'\tTCP => {stack_name} ({match_level_str(match_confidence)})')
                     _tcp = f'{stack_name} <- {match_level_str(match_confidence)}'
@@ -827,7 +826,7 @@ if __name__ == '__main__':
                     _tcp = f'Unknown <- {match_level_str(match_confidence)}'
 
             if http_dport != None:
-                (stack_name, match_confidence) = httpv4_probe(dst_host, http_dport, interface, fw, timeout)
+                (stack_name, match_confidence) = httpv4_probe(dst_host, http_dport, interface, skip_iptables, timeout)
                 if stack_name:
                     print(f'\tHTTP => {stack_name} ({match_level_str(match_confidence)})')
                     _http = f'{stack_name} <- {match_level_str(match_confidence)}'
@@ -836,7 +835,7 @@ if __name__ == '__main__':
                     _http = f'Unknown <- {match_level_str(match_confidence)}'
 
             if ssh_dport != None:
-                (stack_name, match_confidence) = sshv4_probe(dst_host, ssh_dport, interface, fw, timeout)
+                (stack_name, match_confidence) = sshv4_probe(dst_host, ssh_dport, interface, skip_iptables, timeout)
                 if stack_name:
                     print(f'\tSSH => {stack_name} ({match_level_str(match_confidence)})')
                     _ssh = f'{stack_name} <- {match_level_str(match_confidence)}'
@@ -845,7 +844,7 @@ if __name__ == '__main__':
                     _ssh = f'Unknown <- {match_level_str(match_confidence)}'
 
             if ftp_dport != None:
-                (stack_name, match_confidence) = ftpv4_probe(dst_host, ftp_dport, interface, fw, timeout)
+                (stack_name, match_confidence) = ftpv4_probe(dst_host, ftp_dport, interface, skip_iptables, timeout)
                 if stack_name:
                     print(f'\tFTP => {stack_name} ({match_level_str(match_confidence)})')
                     _ftp = f'{stack_name} <- {match_level_str(match_confidence)}'
